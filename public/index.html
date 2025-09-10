@@ -1,0 +1,436 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title></title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen', 'Ubuntu', 'Cantarell', sans-serif;
+            background: #000000;
+            min-height: 100vh;
+            color: #ffffff;
+            line-height: 1.6;
+        }
+        
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        
+        .header {
+            text-align: center;
+            color: #ffffff;
+            margin-bottom: 40px;
+            padding: 40px 0;
+        }
+        
+        .header h1 {
+            font-size: 2.5rem;
+            font-weight: 700;
+            margin-bottom: 10px;
+            background: linear-gradient(135deg, #3b82f6, #60a5fa);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+        
+        .header p {
+            font-size: 1.1rem;
+            color: #9ca3af;
+        }
+        
+        .wallet-connect {
+            background: #1f2937;
+            border: 1px solid #374151;
+            border-radius: 12px;
+            padding: 40px;
+            margin-bottom: 30px;
+            text-align: center;
+        }
+        
+        .wallet-connect h2 {
+            color: #ffffff;
+            margin-bottom: 16px;
+            font-size: 1.5rem;
+            font-weight: 600;
+        }
+        
+        .wallet-connect p {
+            color: #9ca3af;
+            margin-bottom: 24px;
+        }
+        
+        .connect-btn {
+            background: #3b82f6;
+            color: white;
+            border: none;
+            padding: 12px 24px;
+            border-radius: 8px;
+            font-size: 16px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+        }
+        
+        .connect-btn:hover {
+            background: #2563eb;
+            transform: translateY(-1px);
+        }
+        
+        .connect-btn:disabled {
+            background: #4b5563;
+            cursor: not-allowed;
+            transform: none;
+        }
+        
+        .wallet-info {
+            background: #1f2937;
+            border: 1px solid #374151;
+            border-radius: 12px;
+            padding: 24px;
+            margin-bottom: 30px;
+        }
+        
+        .wallet-info h3 {
+            color: #ffffff;
+            margin-bottom: 8px;
+            font-size: 1.125rem;
+            font-weight: 600;
+        }
+        
+        .wallet-info p {
+            color: #9ca3af;
+            font-family: 'SF Mono', Monaco, 'Cascadia Code', 'Roboto Mono', Consolas, 'Courier New', monospace;
+            font-size: 14px;
+        }
+        
+        .analysis-section {
+            background: #1f2937;
+            border: 1px solid #374151;
+            border-radius: 12px;
+            padding: 32px;
+            margin-bottom: 30px;
+        }
+        
+        .analysis-section h2 {
+            color: #ffffff;
+            margin-bottom: 24px;
+            font-size: 1.5rem;
+            font-weight: 600;
+        }
+        
+        .loading {
+            text-align: center;
+            padding: 60px 20px;
+            color: #9ca3af;
+        }
+        
+        .loading div:first-child {
+            font-size: 18px;
+            margin-bottom: 12px;
+        }
+        
+        .loading div:last-child {
+            font-size: 14px;
+            color: #6b7280;
+        }
+        
+        .error {
+            background: #1f2937;
+            border: 1px solid #ef4444;
+            color: #fca5a5;
+            padding: 16px;
+            border-radius: 8px;
+            margin: 20px 0;
+        }
+        
+        .success {
+            background: #1f2937;
+            border: 1px solid #10b981;
+            color: #6ee7b7;
+            padding: 16px;
+            border-radius: 8px;
+            margin: 20px 0;
+        }
+        
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 20px;
+            margin-bottom: 32px;
+        }
+        
+        .stat-card {
+            background: #111827;
+            border: 1px solid #374151;
+            padding: 24px;
+            border-radius: 12px;
+            text-align: center;
+            border-left: 4px solid #3b82f6;
+            transition: transform 0.2s ease;
+        }
+        
+        .stat-card:hover {
+            transform: translateY(-2px);
+        }
+        
+        .stat-value {
+            font-size: 24px;
+            font-weight: 700;
+            color: #3b82f6;
+            margin-bottom: 8px;
+        }
+        
+        .stat-label {
+            color: #9ca3af;
+            font-size: 14px;
+            font-weight: 500;
+        }
+        
+        .transactions-table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 24px;
+            background: #111827;
+            border-radius: 8px;
+            overflow: hidden;
+            font-size: 12px;
+        }
+        
+        .transactions-table th,
+        .transactions-table td {
+            padding: 8px 12px;
+            text-align: left;
+            border-bottom: 1px solid #374151;
+            vertical-align: top;
+        }
+        
+        .transactions-table th {
+            background: #111827;
+            color: #f3f4f6;
+            font-weight: 600;
+            font-size: 11px;
+            text-transform: uppercase;
+            letter-spacing: 0.025em;
+            position: sticky;
+            top: 0;
+            z-index: 10;
+        }
+        
+        .transactions-table td {
+            color: #d1d5db;
+            font-size: 11px;
+        }
+        
+        .transactions-table tr:hover {
+            background: #1f2937;
+        }
+        
+        .transactions-table tr:last-child td {
+            border-bottom: none;
+        }
+        
+        /* Specific column widths for better layout */
+        .transactions-table th:nth-child(1), /* Date */
+        .transactions-table td:nth-child(1) {
+            min-width: 120px;
+        }
+        
+        .transactions-table th:nth-child(2), /* Type */
+        .transactions-table td:nth-child(2) {
+            min-width: 100px;
+        }
+        
+        .transactions-table th:nth-child(3), /* Outgoing */
+        .transactions-table th:nth-child(4), /* Incoming */
+        .transactions-table td:nth-child(3),
+        .transactions-table td:nth-child(4) {
+            min-width: 120px;
+        }
+        
+        .transactions-table th:nth-child(5), /* Fee Asset */
+        .transactions-table td:nth-child(5) {
+            min-width: 80px;
+        }
+        
+        .transactions-table th:nth-child(6), /* Fee Amount */
+        .transactions-table td:nth-child(6) {
+            min-width: 100px;
+        }
+        
+        .transactions-table th:nth-child(7), /* P&L */
+        .transactions-table th:nth-child(8), /* Profit */
+        .transactions-table th:nth-child(9), /* Loss */
+        .transactions-table td:nth-child(7),
+        .transactions-table td:nth-child(8),
+        .transactions-table td:nth-child(9) {
+            min-width: 90px;
+        }
+        
+        .transactions-table th:nth-child(10), /* Comment */
+        .transactions-table td:nth-child(10) {
+            min-width: 200px;
+            max-width: 300px;
+            word-wrap: break-word;
+        }
+        
+        .transactions-table th:nth-child(11), /* Trx ID */
+        .transactions-table td:nth-child(11) {
+            min-width: 120px;
+        }
+        
+        .label-nft-purchase { 
+            color: #10b981; 
+            background: #064e3b;
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-size: 10px;
+            font-weight: 500;
+            white-space: nowrap;
+        }
+        
+        .label-nft-sale { 
+            color: #ef4444; 
+            background: #7f1d1d;
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-size: 10px;
+            font-weight: 500;
+            white-space: nowrap;
+        }
+        
+        .label-deposit { 
+            color: #3b82f6; 
+            background: #1e3a8a;
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-size: 10px;
+            font-weight: 500;
+            white-space: nowrap;
+        }
+        
+        .label-payment { 
+            color: #f59e0b; 
+            background: #78350f;
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-size: 10px;
+            font-weight: 500;
+            white-space: nowrap;
+        }
+        
+        .label-conversion { 
+            color: #8b5cf6; 
+            background: #581c87;
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-size: 10px;
+            font-weight: 500;
+            white-space: nowrap;
+        }
+        
+        .export-section {
+            text-align: center;
+            margin-top: 32px;
+            padding-top: 24px;
+            border-top: 1px solid #374151;
+        }
+        
+        .export-btn {
+            background: #1f2937;
+            border: 1px solid #374151;
+            color: #f3f4f6;
+            padding: 12px 20px;
+            border-radius: 8px;
+            font-size: 14px;
+            font-weight: 500;
+            cursor: pointer;
+            margin: 0 8px;
+            transition: all 0.2s ease;
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+        }
+        
+        .export-btn:hover {
+            background: #374151;
+            border-color: #4b5563;
+            transform: translateY(-1px);
+        }
+        
+        .disconnect-btn {
+            background: #ef4444;
+            color: white;
+            border: none;
+            padding: 8px 16px;
+            border-radius: 6px;
+            font-size: 14px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+        
+        .disconnect-btn:hover {
+            background: #dc2626;
+            transform: translateY(-1px);
+        }
+        
+        /* Scrollbar styling */
+        ::-webkit-scrollbar {
+            width: 8px;
+            height: 8px;
+        }
+        
+        ::-webkit-scrollbar-track {
+            background: #1f2937;
+        }
+        
+        ::-webkit-scrollbar-thumb {
+            background: #4b5563;
+            border-radius: 4px;
+        }
+        
+        ::-webkit-scrollbar-thumb:hover {
+            background: #6b7280;
+        }
+        
+        /* Responsive design */
+        @media (max-width: 768px) {
+            .container {
+                padding: 16px;
+            }
+            
+            .header h1 {
+                font-size: 2rem;
+            }
+            
+            .stats-grid {
+                grid-template-columns: 1fr;
+            }
+            
+            .transactions-table {
+                font-size: 10px;
+            }
+            
+            .transactions-table th,
+            .transactions-table td {
+                padding: 6px 8px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+</body>
+</html>
