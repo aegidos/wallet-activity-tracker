@@ -74,4 +74,3 @@ pids
 *.seed
 *.pid.lock
 next.config.js
-webpack.config.js
