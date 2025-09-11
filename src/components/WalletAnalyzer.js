@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import axios from 'axios';
 import { format } from 'date-fns';
+import { ScatterChart, Scatter, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell } from 'recharts';
 
 
 const API_KEY = process.env.REACT_APP_APESCAN_API_KEY || '8AIZVW9PAGT3UY6FCGRZFDJ51SZGDIG13X';
@@ -1133,6 +1134,467 @@ function WalletAnalyzer({ account }) {
         URL.revokeObjectURL(url);
     };
 
+    // Add this enhanced NFTTradingChart component
+    const NFTTradingChart = ({ transactions }) => {
+        const [selectedCollection, setSelectedCollection] = useState(null);
+        const [selectedBubble, setSelectedBubble] = useState(null);
+        const [isMobile, setIsMobile] = useState(false);
+
+        // Detect mobile device
+        useEffect(() => {
+            const checkMobile = () => {
+                setIsMobile(window.innerWidth <= 768 || 'ontouchstart' in window);
+            };
+            checkMobile();
+            window.addEventListener('resize', checkMobile);
+            return () => window.removeEventListener('resize', checkMobile);
+        }, []);
+
+        // Prepare data for scatter plot with collection grouping
+        const chartData = transactions
+            .filter(tx => tx.type === 'nft' && (tx.profit || tx.loss) && tx.purchasePrice !== undefined)
+            .map((tx, index) => {
+                const profitLoss = tx.profit || -tx.loss || 0;
+                const purchasePrice = tx.purchasePrice || 0;
+                
+                return {
+                    id: index,
+                    date: tx.date.getTime(),
+                    dateFormatted: format(tx.date, 'MMM dd, yyyy'),
+                    purchasePrice: purchasePrice,
+                    profitLoss: profitLoss,
+                    bubbleSize: Math.abs(profitLoss) * 100 + 50,
+                    color: profitLoss >= 0 ? '#10b981' : '#ef4444',
+                    tokenName: tx.tokenName,
+                    tokenId: tx.tokenId,
+                    saleAmount: parseFloat(tx.incomingAmount || '0'),
+                    hash: tx.hash,
+                    isProfit: profitLoss >= 0,
+                    collection: tx.tokenName // For grouping
+                };
+            })
+            .sort((a, b) => a.date - b.date);
+
+        // Get unique collections for filter buttons
+        const collections = [...new Set(chartData.map(item => item.collection))];
+
+        // Filter data based on selected collection
+        const filteredData = selectedCollection 
+            ? chartData.filter(item => item.collection === selectedCollection)
+            : chartData;
+
+        // Enhanced tooltip for mobile and desktop
+        const CustomTooltip = ({ active, payload, label }) => {
+            if (active && payload && payload.length) {
+                const data = payload[0].payload;
+                return (
+                    <div style={{
+                        backgroundColor: '#1f2937',
+                        border: '1px solid #374151',
+                        borderRadius: '12px',
+                        padding: '16px',
+                        color: '#fff',
+                        fontSize: isMobile ? '14px' : '12px',
+                        boxShadow: '0 8px 25px -5px rgba(0, 0, 0, 0.4)',
+                        maxWidth: isMobile ? '280px' : '320px',
+                        minWidth: isMobile ? '250px' : '280px'
+                    }}>
+                        <div style={{
+                            fontWeight: '700', 
+                            marginBottom: '12px', 
+                            color: '#e5e7eb',
+                            fontSize: isMobile ? '16px' : '14px',
+                            borderBottom: '1px solid #374151',
+                            paddingBottom: '8px'
+                        }}>
+                            🎨 {data.tokenName} #{data.tokenId}
+                        </div>
+                        <div style={{marginBottom: '6px'}}>
+                            📅 <strong>Date:</strong> {data.dateFormatted}
+                        </div>
+                        <div style={{marginBottom: '6px'}}>
+                            💰 <strong>Purchase:</strong> {data.purchasePrice.toFixed(4)} APE
+                        </div>
+                        <div style={{marginBottom: '6px'}}>
+                            💸 <strong>Sale:</strong> {data.saleAmount.toFixed(4)} APE
+                        </div>
+                        <div style={{
+                            color: data.color,
+                            fontWeight: '700',
+                            marginTop: '12px',
+                            padding: '8px',
+                            backgroundColor: data.isProfit ? 'rgba(16, 185, 129, 0.1)' : 'rgba(239, 68, 68, 0.1)',
+                            borderRadius: '6px',
+                            fontSize: isMobile ? '16px' : '14px'
+                        }}>
+                            {data.isProfit ? '📈 Profit' : '📉 Loss'}: {Math.abs(data.profitLoss).toFixed(4)} APE
+                        </div>
+                        <div style={{
+                            fontSize: isMobile ? '11px' : '10px', 
+                            color: '#9ca3af', 
+                            marginTop: '10px',
+                            fontFamily: 'monospace'
+                        }}>
+                            🔗 Tx: {data.hash.slice(0, 8)}...{data.hash.slice(-6)}
+                        </div>
+                        {isMobile && (
+                            <div style={{
+                                fontSize: '11px',
+                                color: '#6b7280',
+                                marginTop: '8px',
+                                fontStyle: 'italic'
+                            }}>
+                                💡 Tap bubble to highlight collection
+                            </div>
+                        )}
+                    </div>
+                );
+            }
+            return null;
+        };
+
+        // Enhanced dot component with click interaction
+        const CustomDot = (props) => {
+            const { cx, cy, payload } = props;
+            const radius = Math.min(Math.max(payload.bubbleSize / 20, 6), 20); // Larger for mobile
+            const isSelected = selectedBubble?.id === payload.id;
+            const isCollectionHighlighted = selectedCollection === payload.collection;
+            
+            return (
+                <g>
+                    {/* Outer glow for selected bubble */}
+                    {isSelected && (
+                        <circle
+                            cx={cx}
+                            cy={cy}
+                            r={radius + 6}
+                            fill={payload.color}
+                            fillOpacity={0.2}
+                            stroke={payload.color}
+                            strokeWidth={2}
+                            strokeOpacity={0.5}
+                        />
+                    )}
+                    
+                    {/* Main bubble */}
+                    <circle
+                        cx={cx}
+                        cy={cy}
+                        r={radius}
+                        fill={payload.color}
+                        fillOpacity={isCollectionHighlighted ? 0.9 : (selectedCollection ? 0.3 : 0.7)}
+                        stroke={payload.color}
+                        strokeWidth={isSelected ? 3 : (isCollectionHighlighted ? 2 : 1)}
+                        style={{ 
+                            cursor: 'pointer',
+                            transition: 'all 0.2s ease'
+                        }}
+                        onClick={(e) => {
+                            e.stopPropagation();
+                            setSelectedBubble(payload);
+                            setSelectedCollection(payload.collection);
+                        }}
+                    />
+                    
+                    {/* Center dot for better visibility on mobile */}
+                    {isMobile && (
+                        <circle
+                            cx={cx}
+                            cy={cy}
+                            r={2}
+                            fill={payload.isProfit ? '#ffffff' : '#000000'}
+                            fillOpacity={0.8}
+                        />
+                    )}
+                </g>
+            );
+        };
+
+        if (chartData.length === 0) {
+            return (
+                <div style={{
+                    textAlign: 'center',
+                    padding: '40px',
+                    color: '#9ca3af',
+                    backgroundColor: '#1f2937',
+                    borderRadius: '12px',
+                    margin: '20px 0'
+                }}>
+                    📊 No NFT trading data available for chart visualization
+                </div>
+            );
+        }
+
+        return (
+            <div style={{
+                backgroundColor: '#1f2937',
+                borderRadius: '12px',
+                padding: isMobile ? '16px' : '20px',
+                margin: '20px 0'
+            }}>
+                <h3 style={{
+                    color: '#e5e7eb',
+                    marginBottom: '20px',
+                    textAlign: 'center',
+                    fontSize: isMobile ? '20px' : '18px',
+                    fontWeight: '600'
+                }}>
+                    📈 NFT Trading Performance
+                </h3>
+
+                {/* Collection Filter Buttons */}
+                <div style={{
+                    marginBottom: '20px',
+                    display: 'flex',
+                    flexWrap: 'wrap',
+                    gap: '8px',
+                    justifyContent: 'center'
+                }}>
+                    <button
+                        onClick={() => {
+                            setSelectedCollection(null);
+                            setSelectedBubble(null);
+                        }}
+                        style={{
+                            padding: isMobile ? '10px 16px' : '8px 12px',
+                            backgroundColor: !selectedCollection ? '#3b82f6' : '#374151',
+                            color: '#fff',
+                            border: 'none',
+                            borderRadius: '20px',
+                            fontSize: isMobile ? '14px' : '12px',
+                            cursor: 'pointer',
+                            fontWeight: '500',
+                            transition: 'all 0.2s'
+                        }}
+                    >
+                        🌟 All Collections ({chartData.length})
+                    </button>
+                    {collections.map(collection => {
+                        const collectionCount = chartData.filter(item => item.collection === collection).length;
+                        const collectionProfit = chartData
+                            .filter(item => item.collection === collection)
+                            .reduce((sum, item) => sum + item.profitLoss, 0);
+                        
+                        return (
+                            <button
+                                key={collection}
+                                onClick={() => {
+                                    setSelectedCollection(selectedCollection === collection ? null : collection);
+                                    setSelectedBubble(null);
+                                }}
+                                style={{
+                                    padding: isMobile ? '10px 16px' : '8px 12px',
+                                    backgroundColor: selectedCollection === collection ? '#10b981' : '#374151',
+                                    color: '#fff',
+                                    border: 'none',
+                                    borderRadius: '20px',
+                                    fontSize: isMobile ? '13px' : '11px',
+                                    cursor: 'pointer',
+                                    fontWeight: '500',
+                                    transition: 'all 0.2s',
+                                    maxWidth: isMobile ? '200px' : 'none',
+                                    overflow: 'hidden',
+                                    textOverflow: 'ellipsis',
+                                    whiteSpace: 'nowrap'
+                                }}
+                                title={`${collection}: ${collectionCount} trades, ${collectionProfit >= 0 ? '+' : ''}${collectionProfit.toFixed(2)} APE`}
+                            >
+                                {collection.length > 12 ? collection.slice(0, 12) + '...' : collection} ({collectionCount})
+                            </button>
+                        );
+                    })}
+                </div>
+
+                {/* Selected Collection Info */}
+                {selectedCollection && (
+                    <div style={{
+                        backgroundColor: '#374151',
+                        borderRadius: '8px',
+                        padding: '12px',
+                        marginBottom: '20px',
+                        textAlign: 'center'
+                    }}>
+                        <div style={{ color: '#e5e7eb', fontWeight: '600', marginBottom: '4px' }}>
+                            🎨 {selectedCollection}
+                        </div>
+                        <div style={{ fontSize: '14px', color: '#9ca3af' }}>
+                            {filteredData.length} trades • 
+                            {filteredData.reduce((sum, item) => sum + item.profitLoss, 0) >= 0 ? ' 📈 ' : ' 📉 '}
+                            {filteredData.reduce((sum, item) => sum + item.profitLoss, 0) >= 0 ? '+' : ''}
+                            {filteredData.reduce((sum, item) => sum + item.profitLoss, 0).toFixed(4)} APE total
+                        </div>
+                    </div>
+                )}
+                
+                {/* Legend */}
+                <div style={{
+                    display: 'flex',
+                    justifyContent: 'center',
+                    alignItems: 'center',
+                    gap: isMobile ? '15px' : '20px',
+                    marginBottom: '20px',
+                    fontSize: isMobile ? '14px' : '14px',
+                    flexWrap: 'wrap'
+                }}>
+                    <div style={{display: 'flex', alignItems: 'center', gap: '8px'}}>
+                        <div style={{
+                            width: '16px',
+                            height: '16px',
+                            borderRadius: '50%',
+                            backgroundColor: '#10b981'
+                        }}></div>
+                        <span style={{color: '#e5e7eb'}}>Profit</span>
+                    </div>
+                    <div style={{display: 'flex', alignItems: 'center', gap: '8px'}}>
+                        <div style={{
+                            width: '16px',
+                            height: '16px',
+                            borderRadius: '50%',
+                            backgroundColor: '#ef4444'
+                        }}></div>
+                        <span style={{color: '#e5e7eb'}}>Loss</span>
+                    </div>
+                    <div style={{color: '#9ca3af', fontSize: isMobile ? '12px' : '12px'}}>
+                        {isMobile ? 'Tap bubbles' : 'Bubble size'} = P&L magnitude
+                    </div>
+                </div>
+
+                {/* Chart Container */}
+                <ResponsiveContainer width="100%" height={isMobile ? 350 : 400}>
+                    <ScatterChart
+                        data={filteredData}
+                        margin={{
+                            top: 20,
+                            right: isMobile ? 20 : 30,
+                            bottom: isMobile ? 80 : 60,
+                            left: isMobile ? 50 : 40,
+                        }}
+                        onClick={() => {
+                            // Clear selection when clicking empty area
+                            setSelectedBubble(null);
+                        }}
+                    >
+                        <CartesianGrid 
+                            strokeDasharray="3 3" 
+                            stroke="#374151" 
+                            horizontal={true}
+                            vertical={true}
+                        />
+                        <XAxis
+                            type="number"
+                            dataKey="date"
+                            domain={['dataMin', 'dataMax']}
+                            tickFormatter={(timestamp) => {
+                                const date = new Date(timestamp);
+                                return isMobile ? format(date, 'M/d') : format(date, 'MMM dd');
+                            }}
+                            stroke="#9ca3af"
+                            fontSize={isMobile ? 11 : 12}
+                            angle={isMobile ? -60 : -45}
+                            textAnchor="end"
+                            height={isMobile ? 100 : 80}
+                            interval={isMobile ? 'preserveStartEnd' : 0}
+                        />
+                        <YAxis
+                            type="number"
+                            dataKey="purchasePrice"
+                            domain={['dataMin - 10', 'dataMax + 10']}
+                            tickFormatter={(value) => isMobile ? `${value.toFixed(0)}` : `${value.toFixed(0)} APE`}
+                            stroke="#9ca3af"
+                            fontSize={isMobile ? 11 : 12}
+                            width={isMobile ? 45 : 60}
+                            label={!isMobile ? { 
+                                value: 'Purchase Price (APE)', 
+                                angle: -90, 
+                                position: 'insideLeft',
+                                style: { textAnchor: 'middle', fill: '#9ca3af' }
+                            } : undefined}
+                        />
+                        <Tooltip 
+                            content={<CustomTooltip />}
+                            trigger={isMobile ? 'click' : 'hover'}
+                            allowEscapeViewBox={{ x: true, y: true }}
+                        />
+                        <Scatter
+                            dataKey="purchasePrice"
+                            shape={<CustomDot />}
+                        />
+                    </ScatterChart>
+                </ResponsiveContainer>
+                
+                {/* Instructions */}
+                <div style={{
+                    textAlign: 'center',
+                    color: '#9ca3af',
+                    fontSize: isMobile ? '12px' : '12px',
+                    marginTop: '15px',
+                    lineHeight: '1.4'
+                }}>
+                    {isMobile ? (
+                        <>
+                            💡 Tap collection buttons to filter • Tap bubbles for details
+                            <br />
+                            📱 Pinch to zoom • Scroll to pan
+                        </>
+                    ) : (
+                        '💡 Click collection buttons to filter • Hover over bubbles for details • Click and drag to zoom'
+                    )}
+                </div>
+
+                {/* Selected Bubble Details (Mobile) */}
+                {isMobile && selectedBubble && (
+                    <div style={{
+                        backgroundColor: '#374151',
+                        borderRadius: '8px',
+                        padding: '16px',
+                        marginTop: '20px',
+                        border: `2px solid ${selectedBubble.color}`
+                    }}>
+                        <div style={{
+                            fontWeight: '600',
+                            color: '#e5e7eb',
+                            marginBottom: '8px',
+                            fontSize: '16px'
+                        }}>
+                            🎨 {selectedBubble.tokenName} #{selectedBubble.tokenId}
+                        </div>
+                        <div style={{color: '#d1d5db', marginBottom: '4px'}}>
+                            📅 {selectedBubble.dateFormatted}
+                        </div>
+                        <div style={{color: '#d1d5db', marginBottom: '4px'}}>
+                            💰 Purchase: {selectedBubble.purchasePrice.toFixed(4)} APE
+                        </div>
+                        <div style={{color: '#d1d5db', marginBottom: '8px'}}>
+                            💸 Sale: {selectedBubble.saleAmount.toFixed(4)} APE
+                        </div>
+                        <div style={{
+                            color: selectedBubble.color,
+                            fontWeight: '700',
+                            fontSize: '18px'
+                        }}>
+                            {selectedBubble.isProfit ? '📈' : '📉'} {selectedBubble.isProfit ? '+' : '-'}
+                            {Math.abs(selectedBubble.profitLoss).toFixed(4)} APE
+                        </div>
+                        <button
+                            onClick={() => setSelectedBubble(null)}
+                            style={{
+                                marginTop: '12px',
+                                padding: '8px 16px',
+                                backgroundColor: '#6b7280',
+                                color: '#fff',
+                                border: 'none',
+                                borderRadius: '6px',
+                                cursor: 'pointer'
+                            }}
+                        >
+                            ✕ Close
+                        </button>
+                    </div>
+                )}
+            </div>
+        );
+    };
+
     if (loading) {
         return (
             <div className="analysis-section">
@@ -1199,6 +1661,13 @@ function WalletAnalyzer({ account }) {
                             📊 Export CSV
                         </button>
                     </div>
+                </div>
+            )}
+
+            {/* ADD THE CHART HERE - BEFORE the transaction table */}
+            {analysis && transactions.length > 0 && (
+                <div className="analysis-section">
+                    <NFTTradingChart transactions={transactions} />
                 </div>
             )}
 
