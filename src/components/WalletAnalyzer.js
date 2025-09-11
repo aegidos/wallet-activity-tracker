@@ -2,7 +2,8 @@ import React, { useState, useEffect } from 'react';
 import axios from 'axios';
 import { format } from 'date-fns';
 
-const API_KEY = '8AIZVW9PAGT3UY6FCGRZFDJ51SZGDIG13X';
+
+const API_KEY = process.env.REACT_APP_APESCAN_API_KEY || '8AIZVW9PAGT3UY6FCGRZFDJ51SZGDIG13X';
 const BASE_URL = 'https://api.apescan.io/api';
 const ZERO_ADDRESS = '0x0000000000000000000000000000000000000000';
 
@@ -11,12 +12,85 @@ function WalletAnalyzer({ account }) {
     const [analysis, setAnalysis] = useState(null);
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState(null);
+    
+    // Add sorting state
+    const [sortConfig, setSortConfig] = useState({
+        key: 'date',
+        direction: 'desc' // Default to descending (newest first)
+    });
 
     useEffect(() => {
         if (account) {
             fetchWalletData();
         }
     }, [account]);
+
+    // Add sorting function
+    const handleSort = (key) => {
+        let direction = 'asc';
+        
+        if (sortConfig.key === key && sortConfig.direction === 'asc') {
+            direction = 'desc';
+        }
+        
+        setSortConfig({ key, direction });
+    };
+
+    // Add function to get sort indicator
+    const getSortIndicator = (columnKey) => {
+        if (sortConfig.key !== columnKey) {
+            return ' ↕️'; // Both arrows for unsorted
+        }
+        return sortConfig.direction === 'asc' ? ' ↑' : ' ↓';
+    };
+
+    // Add function to sort transactions
+    const sortedTransactions = React.useMemo(() => {
+        if (!transactions.length) return [];
+        
+        const sorted = [...transactions].sort((a, b) => {
+            let aValue = a[sortConfig.key];
+            let bValue = b[sortConfig.key];
+            
+            // Handle different data types
+            switch (sortConfig.key) {
+                case 'date':
+                    aValue = new Date(aValue).getTime();
+                    bValue = new Date(bValue).getTime();
+                    break;
+                case 'outgoingAmount':
+                case 'incomingAmount':
+                case 'feeAmount':
+                case 'profit':
+                case 'loss':
+                    aValue = parseFloat(aValue) || 0;
+                    bValue = parseFloat(bValue) || 0;
+                    break;
+                case 'label':
+                case 'outgoingAsset':
+                case 'incomingAsset':
+                case 'feeAsset':
+                case 'comment':
+                case 'hash':
+                    aValue = (aValue || '').toString().toLowerCase();
+                    bValue = (bValue || '').toString().toLowerCase();
+                    break;
+                default:
+                    aValue = aValue || '';
+                    bValue = bValue || '';
+            }
+            
+            if (aValue < bValue) {
+                return sortConfig.direction === 'asc' ? -1 : 1;
+            }
+            if (aValue > bValue) {
+                return sortConfig.direction === 'asc' ? 1 : -1;
+            }
+            return 0;
+        });
+        
+        return sorted;
+    }, [transactions, sortConfig]);
 
     const fetchDataWithRetry = async (action, maxRetries = 3) => {
         for (let attempt = 1; attempt <= maxRetries; attempt++) {
@@ -744,7 +818,7 @@ function WalletAnalyzer({ account }) {
         });
 
         // Sort by date (like Python script)
-        transactions.sort((a, b) => a.date - b.date);
+        transactions.sort((a, b) => b.date - a.date); // Changed from a.date - b.date
         
         // At the end of processWalletData, before return:
         console.log('=== FINAL PROCESSING RESULTS ===');
@@ -1007,21 +1081,87 @@ function WalletAnalyzer({ account }) {
                         <table className="transactions-table">
                             <thead>
                                 <tr>
-                                    <th>Date</th>
-                                    <th>Type</th>
-                                    <th>Outgoing</th>
-                                    <th>Incoming</th>
-                                    <th>Fee Asset</th>
-                                    <th>Fee Amount</th>
-                                    <th>P&L</th>
-                                    <th>Profit</th>
-                                    <th>Loss</th>
-                                    <th>Comment</th>
-                                    <th>Trx. ID</th>
+                                    <th 
+                                        onClick={() => handleSort('date')}
+                                        style={{cursor: 'pointer', userSelect: 'none'}}
+                                        title="Click to sort by date"
+                                    >
+                                        Date{getSortIndicator('date')}
+                                    </th>
+                                    <th 
+                                        onClick={() => handleSort('label')}
+                                        style={{cursor: 'pointer', userSelect: 'none'}}
+                                        title="Click to sort by type"
+                                    >
+                                        Type{getSortIndicator('label')}
+                                    </th>
+                                    <th 
+                                        onClick={() => handleSort('outgoingAmount')}
+                                        style={{cursor: 'pointer', userSelect: 'none'}}
+                                        title="Click to sort by outgoing amount"
+                                    >
+                                        Outgoing{getSortIndicator('outgoingAmount')}
+                                    </th>
+                                    <th 
+                                        onClick={() => handleSort('incomingAmount')}
+                                        style={{cursor: 'pointer', userSelect: 'none'}}
+                                        title="Click to sort by incoming amount"
+                                    >
+                                        Incoming{getSortIndicator('incomingAmount')}
+                                    </th>
+                                    <th 
+                                        onClick={() => handleSort('feeAsset')}
+                                        style={{cursor: 'pointer', userSelect: 'none'}}
+                                        title="Click to sort by fee asset"
+                                    >
+                                        Fee Asset{getSortIndicator('feeAsset')}
+                                    </th>
+                                    <th 
+                                        onClick={() => handleSort('feeAmount')}
+                                        style={{cursor: 'pointer', userSelect: 'none'}}
+                                        title="Click to sort by fee amount"
+                                    >
+                                        Fee Amount{getSortIndicator('feeAmount')}
+                                    </th>
+                                    <th 
+                                        onClick={() => handleSort('profit')}
+                                        style={{cursor: 'pointer', userSelect: 'none'}}
+                                        title="Click to sort by P&L"
+                                    >
+                                        P&L{getSortIndicator('profit')}
+                                    </th>
+                                    <th 
+                                        onClick={() => handleSort('profit')}
+                                        style={{cursor: 'pointer', userSelect: 'none'}}
+                                        title="Click to sort by profit"
+                                    >
+                                        Profit{getSortIndicator('profit')}
+                                    </th>
+                                    <th 
+                                        onClick={() => handleSort('loss')}
+                                        style={{cursor: 'pointer', userSelect: 'none'}}
+                                        title="Click to sort by loss"
+                                    >
+                                        Loss{getSortIndicator('loss')}
+                                    </th>
+                                    <th 
+                                        onClick={() => handleSort('comment')}
+                                        style={{cursor: 'pointer', userSelect: 'none'}}
+                                        title="Click to sort by comment"
+                                    >
+                                        Comment{getSortIndicator('comment')}
+                                    </th>
+                                    <th 
+                                        onClick={() => handleSort('hash')}
+                                        style={{cursor: 'pointer', userSelect: 'none'}}
+                                        title="Click to sort by transaction ID"
+                                    >
+                                        Trx. ID{getSortIndicator('hash')}
+                                    </th>
                                 </tr>
                             </thead>
                             <tbody>
-                                {transactions.map((tx, index) => (
+                                {sortedTransactions.map((tx, index) => (
                                     <tr key={index}>
                                         <td>{format(tx.date, 'MMM dd, yyyy HH:mm')}</td>
                                         <td>

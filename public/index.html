@@ -217,15 +217,26 @@
         }
         
         .transactions-table th {
-            background: #111827;
-            color: #f3f4f6;
+            background-color: #f8fafc;
+            border-bottom: 2px solid #e2e8f0;
+            padding: 12px 8px;
+            text-align: left;
             font-weight: 600;
-            font-size: 11px;
-            text-transform: uppercase;
-            letter-spacing: 0.025em;
-            position: sticky;
-            top: 0;
-            z-index: 10;
+            color: #374151;
+            white-space: nowrap;
+            transition: background-color 0.2s;
+        }
+        
+        .transactions-table th:hover {
+            background-color: #e2e8f0;
+        }
+        
+        .transactions-table th[style*="cursor: pointer"]:hover {
+            background-color: #cbd5e1;
+        }
+        
+        .transactions-table th[style*="cursor: pointer"]:active {
+            background-color: #94a3b8;
         }
         
         .transactions-table td {
@@ -386,6 +397,141 @@
             transform: translateY(-1px);
         }
         
+        /* Add these styles to your existing <style> tag in public/index.html */
+
+.connection-option {
+    background: white;
+    border-radius: 12px;
+    padding: 24px;
+    margin-bottom: 20px;
+    border: 1px solid #e5e7eb;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+}
+
+.connection-option h3 {
+    margin: 0 0 8px 0;
+    color: #1f2937;
+    font-size: 18px;
+    font-weight: 600;
+}
+
+.connection-option p {
+    margin: 0 0 16px 0;
+    color: #6b7280;
+    font-size: 14px;
+}
+
+.divider {
+    text-align: center;
+    margin: 24px 0;
+    position: relative;
+}
+
+.divider::before {
+    content: '';
+    position: absolute;
+    top: 50%;
+    left: 0;
+    right: 0;
+    height: 1px;
+    background: #e5e7eb;
+}
+
+.divider span {
+    background: #f9fafb;
+    padding: 0 16px;
+    color: #9ca3af;
+    font-size: 14px;
+    font-weight: 500;
+}
+
+.address-form {
+    width: 100%;
+}
+
+.input-group {
+    display: flex;
+    gap: 12px;
+    align-items: stretch;
+}
+
+.address-input {
+    flex: 1;
+    padding: 12px 16px;
+    border: 2px solid #e5e7eb;
+    border-radius: 8px;
+    font-size: 14px;
+    font-family: 'Courier New', monospace;
+    transition: border-color 0.2s;
+}
+
+.address-input:focus {
+    outline: none;
+    border-color: #3b82f6;
+    box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
+}
+
+.address-input::placeholder {
+    color: #9ca3af;
+    font-family: inherit;
+}
+
+.observe-btn {
+    padding: 12px 20px;
+    background: #059669;
+    color: white;
+    border: none;
+    border-radius: 8px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background-color 0.2s;
+    white-space: nowrap;
+}
+
+.observe-btn:hover:not(:disabled) {
+    background: #047857;
+}
+
+.observe-btn:disabled {
+    background: #d1d5db;
+    cursor: not-allowed;
+}
+
+.wallet-actions {
+    display: flex;
+    gap: 12px;
+    margin-top: 16px;
+    flex-wrap: wrap;
+}
+
+.disconnect-btn, .clear-btn {
+    padding: 8px 16px;
+    border: none;
+    border-radius: 6px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: background-color 0.2s;
+    font-size: 14px;
+}
+
+.disconnect-btn {
+    background: #ef4444;
+    color: white;
+}
+
+.disconnect-btn:hover {
+    background: #dc2626;
+}
+
+.clear-btn {
+    background: #6b7280;
+    color: white;
+}
+
+.clear-btn:hover {
+    background: #4b5563;
+}
+
         /* Scrollbar styling */
         ::-webkit-scrollbar {
             width: 8px;
@@ -426,6 +572,23 @@
             .transactions-table th,
             .transactions-table td {
                 padding: 6px 8px;
+            }
+            
+            .input-group {
+                flex-direction: column;
+            }
+            
+            .observe-btn {
+                width: 100%;
+            }
+            
+            .wallet-actions {
+                flex-direction: column;
+            }
+            
+            .disconnect-btn, .clear-btn {
+                width: 100%;
+                text-align: center;
             }
         }
     </style>
