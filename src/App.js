@@ -30,8 +30,8 @@ function App() {
             try {
                 const accounts = await window.ethereum.request({ method: 'eth_accounts' });
                 if (accounts.length > 0) {
-                    const provider = new window.ethereum.constructor(window.ethereum);
-                    setProvider(provider);
+                    // Fixed: Don't create a new provider, just use window.ethereum directly
+                    setProvider(window.ethereum);
                     setAccount(accounts[0]);
                     setAddressToAnalyze(accounts[0]);
                 }
@@ -83,21 +83,53 @@ function App() {
                 }
             }
 
-            const provider = new window.ethereum.constructor(window.ethereum);
-            setProvider(provider);
+            // Fixed: Use window.ethereum directly instead of creating a new provider
+            setProvider(window.ethereum);
             setAccount(accounts[0]);
             setAddressToAnalyze(accounts[0]);
             setManualAddress(''); // Clear manual input when wallet connects
 
+            // Add account change listener
+            window.ethereum.on('accountsChanged', handleAccountsChanged);
+            window.ethereum.on('chainChanged', handleChainChanged);
+
         } catch (error) {
             console.error('Error connecting wallet:', error);
-            setError(error.message || 'Failed to connect wallet');
+            if (error.code === 4001) {
+                setError('Connection rejected by user.');
+            } else if (error.code === -32002) {
+                setError('Connection request already pending. Please check MetaMask.');
+            } else {
+                setError(error.message || 'Failed to connect wallet');
+            }
         } finally {
             setIsConnecting(false);
         }
     };
 
+    const handleAccountsChanged = (accounts) => {
+        if (accounts.length === 0) {
+            // User disconnected
+            disconnectWallet();
+        } else if (accounts[0] !== account) {
+            // User switched accounts
+            setAccount(accounts[0]);
+            setAddressToAnalyze(accounts[0]);
+        }
+    };
+
+    const handleChainChanged = (chainId) => {
+        // Reload the page when chain changes (recommended by MetaMask)
+        window.location.reload();
+    };
+
     const disconnectWallet = () => {
+        // Remove event listeners
+        if (window.ethereum && window.ethereum.removeListener) {
+            window.ethereum.removeListener('accountsChanged', handleAccountsChanged);
+            window.ethereum.removeListener('chainChanged', handleChainChanged);
+        }
+        
         setProvider(null);
         setAccount(null);
         setAddressToAnalyze(null);

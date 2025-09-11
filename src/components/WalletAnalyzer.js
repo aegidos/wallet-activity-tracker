@@ -494,27 +494,18 @@ function WalletAnalyzer({ account }) {
                 }
                 
                 if (nft.from.toLowerCase() === account.toLowerCase()) {
-                    // This is an NFT Sale (like Python script)
-                    const label = 'NFT Sale';
+                    // This is an outgoing NFT - check if it's a sale or transfer
+                    let label = 'NFT Sale';
                     const outgoingAsset = nft.tokenName;
                     const outgoingAmount = '1';
                     let incomingAsset = 'APE';  // Default currency
                     let incomingAmount = '0';
                     
-                    // DEBUG: Add extensive logging for this specific transaction
-                    if (txHash === '0x349489a727f12b20423ea3336e8554a56664a5da90b45f18f26953aa21671af9') {
-                        console.log('=== DEBUGGING TRANSACTION 0x349489a727f12b20423ea3336e8554a56664a5da90b45f18f26953aa21671af9 ===');
-                        console.log('NFT being processed:', nft);
-                        console.log('internalByTx[txHash]:', internalByTx[txHash]);
-                        console.log('nftByTx[txHash]:', nftByTx[txHash]);
-                        console.log('tokenByTx[txHash]:', tokenByTx[txHash]);
-                        console.log('account.toLowerCase():', account.toLowerCase());
-                    }
-                    
-                    // Detect currency and payment from token transfers first (like Python)
+                    // Check if there's any payment received for this NFT
                     let paymentCurrency = null;
                     let paymentAmount = null;
                     let comment = `Token ID: ${nft.tokenID}`;
+                    let isTransfer = false; // Flag to detect transfers
                     
                     // Check token transfers for this transaction
                     if (tokenByTx[txHash]) {
@@ -528,57 +519,29 @@ function WalletAnalyzer({ account }) {
                             paymentCurrency = tokenTx.tokenSymbol;
                             const tokenDecimals = parseInt(tokenTx.tokenDecimal);
                             paymentAmount = parseInt(tokenTx.value) / Math.pow(10, tokenDecimals);
-                            
-                            if (txHash === '0x349489a727f12b20423ea3336e8554a56664a5da90b45f18f26953aa21671af9') {
-                                console.log('Found token transfer payment:', paymentAmount, paymentCurrency);
-                            }
                         }
                     }
                     
-                    // If no token transfer found, check internal transactions (like Python)
+                    // If no token transfer found, check internal transactions
                     if (paymentAmount === null && internalByTx[txHash]) {
-                        if (txHash === '0x349489a727f12b20423ea3336e8554a56664a5da90b45f18f26953aa21671af9') {
-                            console.log('No token payment found, checking internal transactions...');
-                        }
-                        
                         const ourInternalTxs = internalByTx[txHash].filter(
                             itx => itx.to.toLowerCase() === account.toLowerCase()
                         );
-                        
-                        if (txHash === '0x349489a727f12b20423ea3336e8554a56664a5da90b45f18f26953aa21671af9') {
-                            console.log('All internal txs for this hash:', internalByTx[txHash]);
-                            console.log('Filtered ourInternalTxs (to === account):', ourInternalTxs);
-                            console.log('Filter criteria - itx.to.toLowerCase() === account.toLowerCase():');
-                            internalByTx[txHash].forEach((itx, i) => {
-                                console.log(`  Internal tx ${i}: to="${itx.to}" toLowerCase="${itx.to.toLowerCase()}" matches="${itx.to.toLowerCase() === account.toLowerCase()}"`);
-                            });
-                        }
                         
                         // Get all NFTs sold in this batch
                         const batchNfts = nftByTx[txHash] ? nftByTx[txHash].filter(
                             n => n.from.toLowerCase() === account.toLowerCase()
                         ) : [];
                         
-                        if (txHash === '0x349489a727f12b20423ea3336e8554a56664a5da90b45f18f26953aa21671af9') {
-                            console.log('Batch NFTs sold:', batchNfts);
-                            console.log('ourInternalTxs.length:', ourInternalTxs.length, 'batchNfts.length:', batchNfts.length);
-                        }
-                        
                         if (ourInternalTxs.length === batchNfts.length) {
-                            // Match NFT to payment by position in the batch (like Python)
+                            // Match NFT to payment by position in the batch
                             const idx = batchNfts.indexOf(nft);
                             if (idx < ourInternalTxs.length) {
                                 paymentAmount = parseInt(ourInternalTxs[idx].value) / 1e18;
                                 comment = `Token ID: ${nft.tokenID} (Specific sale amount)`;
-                                
-                                if (txHash === '0x349489a727f12b20423ea3336e8554a56664a5da90b45f18f26953aa21671af9') {
-                                    console.log('Matched specific internal tx - idx:', idx);
-                                    console.log('Internal tx value:', ourInternalTxs[idx].value);
-                                    console.log('Calculated paymentAmount:', paymentAmount);
-                                }
                             }
                         } else {
-                            // Sum all incoming value and divide by number of NFTs (like Python)
+                            // Sum all incoming value and divide by number of NFTs
                             const totalApe = ourInternalTxs.reduce((sum, itx) => sum + parseInt(itx.value), 0) / 1e18;
                             if (batchNfts.length > 0) {
                                 paymentAmount = totalApe / batchNfts.length;
@@ -587,36 +550,23 @@ function WalletAnalyzer({ account }) {
                                 paymentAmount = totalApe;
                                 comment = `Token ID: ${nft.tokenID} (Batch sale)`;
                             }
-                            
-                            if (txHash === '0x349489a727f12b20423ea3336e8554a56664a5da90b45f18f26953aa21671af9') {
-                                console.log('Using estimated/batch sale calculation');
-                                console.log('Total APE from internal txs:', totalApe);
-                                console.log('Final paymentAmount:', paymentAmount);
-                            }
-                        }
-                    } else if (paymentAmount === null) {
-                        if (txHash === '0x349489a727f12b20423ea3336e8554a56664a5da90b45f18f26953aa21671af9') {
-                            console.log('No internal transactions found for this hash!');
-                            console.log('internalByTx[txHash] exists?', !!internalByTx[txHash]);
                         }
                     }
                     
-                    // Set the payment details
-                    if (paymentCurrency) {
-                        incomingAsset = paymentCurrency;
-                    }
-                    
-                    if (paymentAmount !== null) {
+                    // **NEW LOGIC**: Check if this is a transfer (no payment received)
+                    if (paymentAmount === null || paymentAmount === 0) {
+                        // This is a transfer, not a sale
+                        label = 'NFT Transfer (Out)';
+                        incomingAsset = '';
+                        incomingAmount = '';
+                        comment = `Token ID: ${nft.tokenID} (Transfer to another wallet - no payment received)`;
+                        isTransfer = true;
+                    } else {
+                        // This is a real sale with payment
+                        if (paymentCurrency) {
+                            incomingAsset = paymentCurrency;
+                        }
                         incomingAmount = paymentAmount.toString();
-                    }
-                    
-                    if (txHash === '0x349489a727f12b20423ea3336e8554a56664a5da90b45f18f26953aa21671af9') {
-                        console.log('Final values:');
-                        console.log('  paymentCurrency:', paymentCurrency);
-                        console.log('  paymentAmount:', paymentAmount);
-                        console.log('  incomingAsset:', incomingAsset);
-                        console.log('  incomingAmount:', incomingAmount);
-                        console.log('=== END DEBUG ===');
                     }
                     
                     transactions.push({
@@ -632,23 +582,169 @@ function WalletAnalyzer({ account }) {
                         comment: comment,
                         type: 'nft',
                         tokenId: nft.tokenID,
-                        tokenName: nft.tokenName
+                        tokenName: nft.tokenName,
+                        isTransfer: isTransfer // Mark as transfer
                     });
                 } else {
-                    // Skip if from zero address and part of a burn transaction (like Python)
+                    // This is an incoming NFT - check if it's a purchase, transfer, or paid mint
+                    let label = 'NFT Purchase';
+                    const incomingAsset = nft.tokenName;
+                    const incomingAmount = '1';
+                    let outgoingAsset = 'APE';  // Default currency
+                    let outgoingAmount = '';
+                    let isTransfer = false; // Flag to detect transfers
+                    let isPaidMint = false; // Flag to detect paid mints
+                    
+                    // Skip if from zero address and part of a burn transaction
                     if (nft.from.toLowerCase() === ZERO_ADDRESS.toLowerCase() && 
                         Object.keys(burnTransactions).includes(txHash)) {
                         return;
                     }
                     
-                    // This is an NFT Purchase (like Python script)
-                    const label = 'NFT Purchase';
-                    const incomingAsset = nft.tokenName;
-                    const incomingAmount = '1';
-                    let outgoingAsset = 'APE';  // Default currency
-                    let outgoingAmount = '';
+                    // **ENHANCED LOGIC FOR MINTS**: Check if this is a mint/gift (from zero address)
+                    if (nft.from.toLowerCase() === ZERO_ADDRESS.toLowerCase()) {
+                        console.log(`🪙 Processing mint: ${nft.tokenName} ID ${nft.tokenID} in tx ${txHash}`);
+                        
+                        // Check if there were any payments made for this mint
+                        let mintPrice = null;
+                        let mintCurrency = null;
+                        
+                        // Method 1: Check if there are token transfers (ERC-20 payments)
+                        if (tokenByTx[txHash]) {
+                            const ourTokenTxs = tokenByTx[txHash].filter(
+                                tx => tx.from.toLowerCase() === account.toLowerCase()
+                            );
+                            
+                            // Get all NFTs minted in this batch from zero address
+                            const batchMints = nftByTx[txHash] ? nftByTx[txHash].filter(
+                                n => n.to.toLowerCase() === account.toLowerCase() && 
+                                     n.from.toLowerCase() === ZERO_ADDRESS.toLowerCase()
+                            ) : [];
+                            
+                            if (ourTokenTxs.length > 0) {
+                                // Use the first outgoing token's currency
+                                mintCurrency = ourTokenTxs[0].tokenSymbol;
+                                const decimals = parseInt(ourTokenTxs[0].tokenDecimal || '18');
+                                
+                                // Calculate total payment in tokens
+                                const totalPaid = ourTokenTxs.reduce((sum, tx) => 
+                                    sum + parseInt(tx.value), 0) / Math.pow(10, decimals);
+                                
+                                // Divide by number of minted NFTs
+                                if (batchMints.length > 0) {
+                                    mintPrice = totalPaid / batchMints.length;
+                                    console.log(`💰 Token payment detected: ${totalPaid} ${mintCurrency} total, ${mintPrice} per NFT (${batchMints.length} minted)`);
+                                }
+                            }
+                        }
+                        
+                        // Method 2: Check if there's a payment transaction (APE native currency)
+                        if (mintPrice === null && mintCurrency === null && txsById[txHash]) {
+                            const paymentTx = txsById[txHash];
+                            if (paymentTx.from.toLowerCase() === account.toLowerCase()) {
+                                const batchMints = nftByTx[txHash] ? nftByTx[txHash].filter(
+                                    n => n.to.toLowerCase() === account.toLowerCase() && 
+                                         n.from.toLowerCase() === ZERO_ADDRESS.toLowerCase()
+                                ) : [];
+                                
+                                if (batchMints.length > 0) {
+                                    const totalPayment = parseInt(paymentTx.value) / 1e18;
+                                    mintPrice = totalPayment / batchMints.length;
+                                    mintCurrency = 'APE';
+                                    console.log(`💰 Native APE payment detected: ${totalPayment} APE total, ${mintPrice} per NFT (${batchMints.length} minted)`);
+                                }
+                            }
+                        }
+                        
+                        // Method 3: Check internal transactions (MOST IMPORTANT FOR SKID CITY CASE)
+                        if (mintPrice === null && mintCurrency === null && internalByTx[txHash]) {
+                            const ourInternalPayments = internalByTx[txHash].filter(
+                                itx => itx.from.toLowerCase() === account.toLowerCase()
+                            );
+                            
+                            const batchMints = nftByTx[txHash] ? nftByTx[txHash].filter(
+                                n => n.to.toLowerCase() === account.toLowerCase() && 
+                                     n.from.toLowerCase() === ZERO_ADDRESS.toLowerCase()
+                            ) : [];
+                            
+                            if (ourInternalPayments.length > 0 && batchMints.length > 0) {
+                                mintCurrency = 'APE';  // Internal txs are in native currency
+                                
+                                // **ENHANCED LOGIC**: Try to match internal payments to NFTs
+                                if (ourInternalPayments.length === batchMints.length) {
+                                    // Perfect match: each internal payment corresponds to one NFT
+                                    const idx = batchMints.indexOf(nft);
+                                    if (idx < ourInternalPayments.length) {
+                                        mintPrice = parseInt(ourInternalPayments[idx].value) / 1e18;
+                                        console.log(`💰 Matched internal payment: ${mintPrice} APE for NFT #${idx + 1}`);
+                                    }
+                                } else {
+                                    // Sum all internal payments and divide by NFT count
+                                    const totalPayment = ourInternalPayments.reduce((sum, itx) => 
+                                        sum + parseInt(itx.value), 0) / 1e18;
+                                    mintPrice = totalPayment / batchMints.length;
+                                    console.log(`💰 Distributed internal payment: ${totalPayment} APE total, ${mintPrice} per NFT (${batchMints.length} minted, ${ourInternalPayments.length} payments)`);
+                                }
+                            }
+                        }
+                        
+                        // **DECISION LOGIC**: Determine if this is a paid mint or free gift
+                        if (mintPrice !== null && mintPrice > 0) {
+                            // This is a PAID MINT - treat as NFT Purchase
+                            label = 'NFT Purchase';
+                            outgoingAsset = mintCurrency;
+                            outgoingAmount = mintPrice.toString();
+                            isPaidMint = true;
+                            
+                            console.log(`✅ Paid mint detected: ${mintPrice} ${mintCurrency} for ${nft.tokenName} #${nft.tokenID}`);
+                        } else {
+                            // This is a FREE MINT/GIFT - requires manual review
+                            label = 'NFT Gift (Manual Review Required)';
+                            outgoingAsset = '';
+                            outgoingAmount = '';
+                            
+                            console.log(`🎁 Free mint/gift detected: ${nft.tokenName} #${nft.tokenID}`);
+                        }
+                        
+                        // Generate appropriate comment
+                        let comment = `Token ID: ${nft.tokenID}`;
+                        if (isPaidMint) {
+                            const batchMints = nftByTx[txHash] ? nftByTx[txHash].filter(
+                                n => n.to.toLowerCase() === account.toLowerCase() && 
+                                     n.from.toLowerCase() === ZERO_ADDRESS.toLowerCase()
+                            ).length : 1;
+                            
+                            if (batchMints > 1) {
+                                comment += ` (Paid mint - part of batch mint of ${batchMints} NFTs for ${mintPrice.toFixed(4)} ${mintCurrency} each)`;
+                            } else {
+                                comment += ` (Paid mint for ${mintPrice.toFixed(4)} ${mintCurrency})`;
+                            }
+                        } else {
+                            comment += ' (Free mint/airdrop - requires manual valuation)';
+                        }
+                        
+                        transactions.push({
+                            hash: txHash,
+                            date: date,
+                            label: label,
+                            outgoingAsset: outgoingAsset,
+                            outgoingAmount: outgoingAmount,
+                            incomingAsset: incomingAsset,
+                            incomingAmount: incomingAmount,
+                            feeAsset: 'APE',
+                            feeAmount: '',
+                            comment: comment,
+                            type: 'nft',
+                            tokenId: nft.tokenID,
+                            tokenName: nft.tokenName,
+                            isGift: !isPaidMint, // Only mark as gift if it's truly free
+                            isPaidMint: isPaidMint
+                        });
+                        return;
+                    }
                     
-                    // Find individual purchase price and currency for this NFT (like Python)
+                    // Regular NFT Purchase logic continues here (non-mint transactions)...
+                    // Find individual purchase price and currency for this NFT
                     let purchasePrice = null;
                     let purchaseCurrency = null;
                     
@@ -725,33 +821,48 @@ function WalletAnalyzer({ account }) {
                         }
                     }
                     
-                    // Set the outgoing asset to the detected currency
-                    if (purchaseCurrency) {
-                        outgoingAsset = purchaseCurrency;
+                    // **NEW LOGIC**: Check if this is a transfer (no payment made)
+                    if (purchasePrice === null || purchasePrice === 0) {
+                        // This is a transfer, not a purchase
+                        label = 'NFT Transfer (In)';
+                        outgoingAsset = '';
+                        outgoingAmount = '';
+                        isTransfer = true;
+                    } else {
+                        // This is a real purchase with payment
+                        if (purchaseCurrency) {
+                            outgoingAsset = purchaseCurrency;
+                        }
+                        if (purchasePrice !== null) {
+                            outgoingAmount = purchasePrice.toString();
+                        }
                     }
                     
-                    // Set the outgoing amount to the purchase price
-                    if (purchasePrice !== null) {
-                        outgoingAmount = purchasePrice.toString();
-                    }
-                    
-                    // Generate comment with token ID information (like Python)
+                    // Generate comment with token ID information
                     let comment = `Token ID: ${nft.tokenID}`;
-                    const batchNfts = nftByTx[txHash] ? nftByTx[txHash].length : 1;
-                    if (batchNfts > 1) {
-                        comment += ` (Part of batch purchase of ${batchNfts} NFTs)`;
+                    if (isTransfer) {
+                        comment += ' (Transfer from another wallet - no payment made)';
+                    } else {
+                        const batchNfts = nftByTx[txHash] ? nftByTx[txHash].length : 1;
+                        if (batchNfts > 1) {
+                            comment += ` (Part of batch purchase of ${batchNfts} NFTs)`;
+                        }
                     }
                     
-                    // For specific known transactions, hardcode the price and currency (like Python)
+                    // For specific known transactions, hardcode the price and currency
                     if (txHash.toLowerCase() === "0x85cbfecf9e5097cc83b7d01bf554cb59038fd7ecbb90fe31500526b314b34e65".toLowerCase()) {
                         outgoingAsset = "APE";
                         outgoingAmount = "17";
+                        isTransfer = false;
+                        label = 'NFT Purchase';
                     }
                     
-                    // For the specific Goblin transaction (like Python)
+                    // For the specific Goblin transaction
                     if (txHash.toLowerCase() === "0x450278a4f1a857295cd4264117d4bfbe2906cc00d946864a6f18f8851faf069d".toLowerCase()) {
                         outgoingAsset = "GEM";
                         outgoingAmount = "1000";
+                        isTransfer = false;
+                        label = 'NFT Purchase';
                     }
                     
                     transactions.push({
@@ -767,7 +878,9 @@ function WalletAnalyzer({ account }) {
                         comment: comment,
                         type: 'nft',
                         tokenId: nft.tokenID,
-                        tokenName: nft.tokenName
+                        tokenName: nft.tokenName,
+                        isTransfer: isTransfer, // Mark as transfer
+                        isPaidMint: isPaidMint
                     });
                 }
             });
@@ -834,16 +947,18 @@ function WalletAnalyzer({ account }) {
     };
 
     const calculateProfitLoss = (transactions) => {
-        // Implement exact same logic as profit_loss.py
+        // Implement exact same logic as profit_loss.py but handle transfers
         const nftPurchases = {};
         let totalProfit = 0;
         let totalLoss = 0;
         let nftTrades = 0;
 
-        // First pass: record NFT purchases (matching profit_loss.py exactly)
+        // First pass: record NFT purchases (including paid mints, but NOT transfers)
         transactions.forEach((tx, index) => {
-            if (tx.label === 'NFT Purchase' && tx.tokenId) {
-                // Extract token ID from comment (like Python script)
+            if ((tx.label === 'NFT Purchase' && tx.tokenId && !tx.isTransfer) || 
+                (tx.isPaidMint && tx.tokenId)) { // Include paid mints
+                
+                // Extract token ID from comment
                 let tokenId = tx.tokenId;
                 if (tx.comment && tx.comment.includes('Token ID:')) {
                     const match = tx.comment.match(/Token ID:\s*(\S+)/);
@@ -852,28 +967,32 @@ function WalletAnalyzer({ account }) {
                     }
                 }
                 
-                // Create unique key exactly like Python: f"{row['Incoming Asset']}_ID_{token_id}"
+                // Create unique key
                 const key = `${tx.incomingAsset}_ID_${tokenId}`;
                 
                 const purchaseAmount = parseFloat(tx.outgoingAmount) || 0;
                 const purchaseCurrency = tx.outgoingAsset;
                 
-                // Store purchase details (like profit_loss.py)
-                nftPurchases[key] = {
-                    purchase_amount: purchaseAmount,  // Use same property names as Python
-                    purchase_currency: purchaseCurrency,
-                    purchase_index: index,
-                    hash: tx.hash
-                };
-                
-                console.log(`Recorded NFT Purchase: ${key} for ${purchaseAmount} ${purchaseCurrency}`);
+                // Only record if there was actually a payment
+                if (purchaseAmount > 0) {
+                    nftPurchases[key] = {
+                        purchase_amount: purchaseAmount,
+                        purchase_currency: purchaseCurrency,
+                        purchase_index: index,
+                        hash: tx.hash,
+                        is_paid_mint: tx.isPaidMint || false
+                    };
+                    
+                    const mintLabel = tx.isPaidMint ? '(Paid Mint)' : '';
+                    console.log(`Recorded NFT Purchase ${mintLabel}: ${key} for ${purchaseAmount} ${purchaseCurrency}`);
+                }
             }
         });
 
-        // Second pass: calculate profit/loss on sales (matching profit_loss.py exactly)
+        // Second pass: calculate profit/loss on sales (but NOT transfers)
         transactions.forEach((tx, index) => {
-            if (tx.label === 'NFT Sale' && tx.tokenId) {
-                // Extract token ID from comment (like Python script)
+            if (tx.label === 'NFT Sale' && tx.tokenId && !tx.isTransfer) {
+                // Extract token ID from comment
                 let tokenId = tx.tokenId;
                 if (tx.comment && tx.comment.includes('Token ID:')) {
                     const match = tx.comment.match(/Token ID:\s*(\S+)/);
@@ -882,16 +1001,15 @@ function WalletAnalyzer({ account }) {
                     }
                 }
                 
-                // Create unique key exactly like Python: f"{row['Outgoing Asset']}_ID_{token_id}"
+                // Create unique key
                 const key = `${tx.outgoingAsset}_ID_${tokenId}`;
                 
                 const saleAmount = parseFloat(tx.incomingAmount) || 0;
                 const saleCurrency = tx.incomingAsset;
                 
                 console.log(`Processing NFT Sale: ${key}, looking for purchase record...`);
-                console.log(`Available purchases:`, Object.keys(nftPurchases));
                 
-                // Check if we have a purchase record (like profit_loss.py)
+                // Check if we have a purchase record
                 const purchase = nftPurchases[key];
                 if (purchase && purchase.purchase_amount > 0) {
                     console.log(`Found purchase record for ${key}: ${purchase.purchase_amount} ${purchase.purchase_currency}`);
@@ -899,7 +1017,7 @@ function WalletAnalyzer({ account }) {
                     const purchaseAmount = purchase.purchase_amount;
                     const purchaseCurrency = purchase.purchase_currency;
                     
-                    // Normalize currencies (WAPE = APE) like profit_loss.py
+                    // Normalize currencies (WAPE = APE)
                     const normalizedSaleCurrency = saleCurrency === 'WAPE' ? 'APE' : saleCurrency;
                     const normalizedPurchaseCurrency = purchaseCurrency === 'WAPE' ? 'APE' : purchaseCurrency;
                     
@@ -923,8 +1041,8 @@ function WalletAnalyzer({ account }) {
                     }
                 } else {
                     console.log(`No purchase record found for ${key}`);
-                    // Treat as gifted/minted (like profit_loss.py)
-                    if (['APE', 'WAPE', 'GEM', 'ETH', 'WETH'].includes(saleCurrency)) {
+                    // Only treat as gifted profit if there was actually a sale amount
+                    if (saleAmount > 0 && ['APE', 'WAPE', 'GEM', 'ETH', 'WETH'].includes(saleCurrency)) {
                         const profit = saleAmount;
                         totalProfit += profit;
                         tx.profit = profit;
@@ -934,6 +1052,16 @@ function WalletAnalyzer({ account }) {
                         tx.comment += ` (No purchase record found, unknown currency ${saleCurrency})`;
                     }
                 }
+            }
+            
+            // **NEW**: Handle transfer out - no profit/loss impact
+            if (tx.label === 'NFT Transfer (Out)' && tx.isTransfer) {
+                tx.comment += ' (Transfer - no profit/loss impact)';
+            }
+            
+            // **NEW**: Handle transfer in - no cost basis
+            if (tx.label === 'NFT Transfer (In)' && tx.isTransfer) {
+                tx.comment += ' (Transfer - no cost basis recorded)';
             }
         });
 
