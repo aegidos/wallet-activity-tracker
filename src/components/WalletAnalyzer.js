@@ -1288,7 +1288,7 @@ function WalletAnalyzer({ account }) {
                             📅 <strong>Date:</strong> {data.dateFormatted}
                         </div>
                         <div style={{marginBottom: '6px'}}>
-                            💰 <strong>Purchase:</strong> {data.purchasePrice.toFixed(4)} APE
+                            <strong>Purchase:</strong> {data.purchasePrice.toFixed(4)} APE
                         </div>
                         <div style={{marginBottom: '6px'}}>
                             💸 <strong>Sale:</strong> {data.saleAmount.toFixed(4)} APE
@@ -1302,7 +1302,7 @@ function WalletAnalyzer({ account }) {
                             borderRadius: '6px',
                             fontSize: isMobile ? '16px' : '14px'
                         }}>
-                            {data.isProfit ? '📈 Profit' : '📉 Loss'}: {Math.abs(data.profitLoss).toFixed(4)} APE
+                            {data.isProfit ? 'Profit' : 'Loss'}: {Math.abs(data.profitLoss).toFixed(4)} APE
                         </div>
                         <div style={{
                             fontSize: isMobile ? '11px' : '10px', 
@@ -1395,7 +1395,7 @@ function WalletAnalyzer({ account }) {
                     borderRadius: '12px',
                     margin: '20px 0'
                 }}>
-                    📊 No NFT trading data available for chart visualization
+                    No NFT trading data available for chart visualization
                 </div>
             );
         }
@@ -1414,7 +1414,7 @@ function WalletAnalyzer({ account }) {
                     fontSize: isMobile ? '20px' : '18px',
                     fontWeight: '600'
                 }}>
-                    📈 NFT Trading Performance
+                    NFT Trading Performance
                 </h3>
 
                 {/* Collection Filter Buttons */}
@@ -1494,7 +1494,7 @@ function WalletAnalyzer({ account }) {
                         </div>
                         <div style={{ fontSize: '14px', color: '#9ca3af' }}>
                             {filteredData.length} trades • 
-                            {filteredData.reduce((sum, item) => sum + item.profitLoss, 0) >= 0 ? ' 📈 ' : ' 📉 '}
+                            {filteredData.reduce((sum, item) => sum + item.profitLoss, 0) >= 0 ? ' ↗ ' : ' ↘ '}
                             {filteredData.reduce((sum, item) => sum + item.profitLoss, 0) >= 0 ? '+' : ''}
                             {filteredData.reduce((sum, item) => sum + item.profitLoss, 0).toFixed(4)} APE total
                         </div>
@@ -1637,7 +1637,7 @@ function WalletAnalyzer({ account }) {
                             📅 {selectedBubble.dateFormatted}
                         </div>
                         <div style={{color: '#d1d5db', marginBottom: '4px'}}>
-                            💰 Purchase: {selectedBubble.purchasePrice.toFixed(4)} APE
+                            Purchase: {selectedBubble.purchasePrice.toFixed(4)} APE
                         </div>
                         <div style={{color: '#d1d5db', marginBottom: '8px'}}>
                             💸 Sale: {selectedBubble.saleAmount.toFixed(4)} APE
@@ -1647,7 +1647,7 @@ function WalletAnalyzer({ account }) {
                             fontWeight: '700',
                             fontSize: '18px'
                         }}>
-                            {selectedBubble.isProfit ? '📈' : '📉'} {selectedBubble.isProfit ? '+' : '-'}
+                            {selectedBubble.isProfit ? '↗' : '↘'} {selectedBubble.isProfit ? '+' : '-'}
                             {Math.abs(selectedBubble.profitLoss).toFixed(4)} APE
                         </div>
                         <button
@@ -1734,7 +1734,7 @@ function WalletAnalyzer({ account }) {
         return (
             <div className="analysis-section">
                 <div className="loading">
-                    <div>🔄 Analyzing wallet activity...</div>
+                    <div>Analyzing wallet activity...</div>
                     <div>This may take a few moments for wallets with many transactions</div>
                 </div>
             </div>
@@ -1751,7 +1751,7 @@ function WalletAnalyzer({ account }) {
                         onClick={fetchWalletData}
                         style={{marginLeft: '15px', padding: '8px 16px', fontSize: '14px'}}
                     >
-                        🔄 Retry
+                        Retry
                     </button>
                 </div>
             </div>
@@ -1762,7 +1762,7 @@ function WalletAnalyzer({ account }) {
         <div>
             {analysis && (
                 <div className="analysis-section">
-                    <h2>📊 Wallet Analysis Summary</h2>
+                    <h2>Wallet Analysis Summary</h2>
                     <div className="stats-grid">
                         <div className="stat-card">
                             <div className="stat-value">{analysis.totalTransactions}</div>
@@ -1796,10 +1796,10 @@ function WalletAnalyzer({ account }) {
 
                     <div className="export-section">
                         <button className="export-btn" onClick={exportToJSON}>
-                            📄 Export JSON
+                            Export JSON
                         </button>
                         <button className="export-btn" onClick={exportToCSV}>
-                            📊 Export CSV
+                            Export CSV
                         </button>
                     </div>
                 </div>
@@ -1843,7 +1843,7 @@ function WalletAnalyzer({ account }) {
                             fontWeight: '500'
                         }}
                     >
-                        🥩 Include APE Staking Rewards
+                        Include APE Staking Rewards
                     </label>
                     {stakingTransactions.length > 0 && (
                         <span style={{
@@ -1887,7 +1887,7 @@ function WalletAnalyzer({ account }) {
                                 backgroundColor: 'rgba(251, 191, 36, 0.1)',
                                 borderRadius: '4px'
                             }}>
-                                ⚠️ No staking rewards detected. Click "🔄 Re-analyze" to fetch staking data.
+                                No staking rewards detected. Click "Re-analyze" to fetch staking data.
                             </div>
                         )}
                     </div>
@@ -1906,14 +1906,14 @@ function WalletAnalyzer({ account }) {
                                 cursor: loading ? 'not-allowed' : 'pointer'
                             }}
                         >
-                            {loading ? '⏳ Analyzing...' : '🔄 Re-analyze with Staking Data'}
+                            {loading ? 'Analyzing...' : 'Re-analyze with Staking Data'}
                         </button>
                     </div>
                 )}
             </div>
 
             <div className="analysis-section">
-                <h2>📋 Transaction History</h2>
+                <h2>Transaction History</h2>
                 {transactions.length > 0 ? (
                     <div style={{overflowX: 'auto'}}>
                         <table className="transactions-table">

@@ -5,7 +5,7 @@
 body {
     margin: 0;
     padding: 0;
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol";
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
     background: linear-gradient(135deg, #0a0a0a 0%, #1a1a2e 25%, #16213e 50%, #0f0f23 75%, #000000 100%);
     background-attachment: fixed;
     color: #e0e0e0;
@@ -13,40 +13,98 @@ body {
 }
 
 a {
-    color: #4a9eff;
+    color: #1F51FF;
     text-decoration: none;
-    transition: color 0.3s ease;
+    transition: all 0.2s ease;
 }
 
 a:hover {
-    color: #66b3ff;
+    color: #4D7FFF;
+    text-shadow: 0 0 8px rgba(31, 81, 255, 0.3);
 }
 
 h1, h2, h3, h4, h5, h6 {
     margin: 0;
     color: #ffffff;
+    font-weight: 600;
+    letter-spacing: -0.025em;
     text-shadow: 0 0 10px rgba(74, 158, 255, 0.3);
 }
 
 .container {
-    max-width: 1200px;
+    max-width: 1400px;
     margin: 0 auto;
-    padding: 20px;
+    padding: 24px;
 }
 
+/* Jupiter-inspired button styles */
 button {
     cursor: pointer;
-    background: linear-gradient(145deg, #1e2a5a, #0f1729);
-    border: 1px solid #4a9eff;
-    color: #e0e0e0;
-    padding: 10px 20px;
-    border-radius: 4px;
-    transition: all 0.3s ease;
+    background: linear-gradient(135deg, rgba(31, 81, 255, 0.8) 0%, rgba(31, 81, 255, 0.6) 100%);
+    border: 1px solid rgba(31, 81, 255, 0.3);
+    color: #FFFFFF;
+    padding: 12px 24px;
+    border-radius: 12px;
+    font-weight: 500;
+    font-size: 14px;
+    transition: all 0.2s ease;
+    backdrop-filter: blur(8px);
+    position: relative;
+    overflow: hidden;
+}
+
+button::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: linear-gradient(135deg, rgba(77, 127, 255, 0.2) 0%, rgba(31, 81, 255, 0.1) 100%);
+    opacity: 0;
+    transition: opacity 0.2s ease;
+    border-radius: 12px;
 }
 
 button:hover {
-    background: linear-gradient(145deg, #2a3a6a, #1a2439);
-    box-shadow: 0 0 15px rgba(74, 158, 255, 0.4);
+    transform: translateY(-1px);
+    box-shadow: 
+        0 4px 20px rgba(31, 81, 255, 0.4),
+        0 0 0 1px rgba(31, 81, 255, 0.5);
+}
+
+button:hover::before {
+    opacity: 1;
+}
+
+button:active {
+    transform: translateY(0);
+}
+
+/* Card styles inspired by Jupiter */
+.card {
+    background: #0F1419;
+    border: 1px solid rgba(31, 81, 255, 0.2);
+    border-radius: 12px;
+    padding: 20px;
+    transition: all 0.3s ease;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+}
+
+.card:hover {
+    border-color: rgba(31, 81, 255, 0.35);
+    box-shadow: 0 4px 16px rgba(31, 81, 255, 0.12);
+}
+
+/* Analysis section styling - matching Jupiter's darker sections */
+.analysis-section {
+    background: #0F1419;
+    border: 1px solid rgba(31, 81, 255, 0.2);
+    border-radius: 16px;
+    padding: 24px;
+    margin-bottom: 20px;
+    backdrop-filter: blur(8px);
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
 }
 
 ul {
@@ -57,4 +115,178 @@ ul {
 img {
     max-width: 100%;
     height: auto;
+}
+
+/* Stats grid styling */
+.stats-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: 20px;
+    margin: 24px 0;
+}
+
+.stat-card {
+    background: #0B1014;
+    border: 1px solid rgba(31, 81, 255, 0.2);
+    border-radius: 12px;
+    padding: 18px;
+    text-align: center;
+    transition: all 0.3s ease;
+    position: relative;
+    overflow: hidden;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4);
+}
+
+.stat-card::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: 3px;
+    background: linear-gradient(90deg, #1F51FF 0%, #4D7FFF 100%);
+    border-radius: 16px 16px 0 0;
+}
+
+.stat-card:hover {
+    transform: translateY(-2px);
+    border-color: rgba(31, 81, 255, 0.4);
+    box-shadow: 0 8px 32px rgba(31, 81, 255, 0.15);
+}
+
+.stat-value {
+    font-size: 24px;
+    font-weight: 700;
+    color: #ffffff;
+    margin-bottom: 8px;
+    letter-spacing: -0.02em;
+}
+
+.stat-label {
+    font-size: 14px;
+    color: #8B9BB5;
+    font-weight: 500;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+/* Export section */
+.export-section {
+    display: flex;
+    gap: 16px;
+    margin-top: 24px;
+    flex-wrap: wrap;
+}
+
+.export-btn {
+    background: linear-gradient(135deg, rgba(31, 81, 255, 0.1) 0%, rgba(31, 81, 255, 0.05) 100%);
+    border: 1px solid rgba(31, 81, 255, 0.3);
+    color: #1F51FF;
+    padding: 12px 20px;
+    border-radius: 12px;
+    font-weight: 500;
+    transition: all 0.2s ease;
+}
+
+.export-btn:hover {
+    background: linear-gradient(135deg, rgba(31, 81, 255, 0.2) 0%, rgba(31, 81, 255, 0.1) 100%);
+    color: #4D7FFF;
+}
+
+/* Connect button styling */
+.connect-btn {
+    background: linear-gradient(135deg, #1F51FF 0%, #4D7FFF 100%);
+    border: none;
+    color: #FFFFFF;
+    padding: 14px 28px;
+    border-radius: 12px;
+    font-weight: 600;
+    font-size: 16px;
+    transition: all 0.2s ease;
+    box-shadow: 0 4px 16px rgba(31, 81, 255, 0.3);
+}
+
+.connect-btn:hover {
+    transform: translateY(-1px);
+    box-shadow: 0 6px 24px rgba(31, 81, 255, 0.4);
+}
+
+/* Loading state */
+.loading {
+    text-align: center;
+    padding: 60px 20px;
+    color: #8B9BB5;
+    font-size: 16px;
+    line-height: 1.6;
+    background: #0F1419;
+    border-radius: 12px;
+    margin: 20px 0;
+    border: 1px solid rgba(31, 81, 255, 0.15);
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+}
+
+/* Table styling */
+table {
+    width: 100%;
+    border-collapse: collapse;
+    background: #0F1419;
+    border-radius: 12px;
+    overflow: hidden;
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
+}
+
+th {
+    background: #0B1014;
+    color: #e0e0e0;
+    padding: 14px 12px;
+    font-weight: 500;
+    font-size: 13px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    border-bottom: 1px solid rgba(31, 81, 255, 0.2);
+}
+
+td {
+    padding: 12px;
+    border-bottom: 1px solid rgba(31, 81, 255, 0.08);
+    color: #e0e0e0;
+    font-size: 13px;
+}
+
+tr:hover {
+    background: rgba(31, 81, 255, 0.03);
+}
+
+/* Input styling */
+input[type="checkbox"] {
+    width: 18px;
+    height: 18px;
+    accent-color: #1F51FF;
+    border-radius: 4px;
+}
+
+/* Mobile responsiveness */
+@media (max-width: 768px) {
+    .container {
+        padding: 16px;
+    }
+    
+    .stats-grid {
+        grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+        gap: 12px;
+    }
+    
+    .analysis-section {
+        padding: 20px;
+        border-radius: 16px;
+    }
+    
+    .stat-card {
+        padding: 16px;
+    }
+    
+    button {
+        padding: 10px 16px;
+        font-size: 13px;
+    }
 }
