@@ -20,6 +20,10 @@ function WalletAnalyzer({ account }) {
         direction: 'desc' // Default to descending (newest first)
     });
 
+    // Add this state after the other useState declarations
+    const [includeStaking, setIncludeStaking] = useState(false);
+    const [stakingTransactions, setStakingTransactions] = useState([]);
+
     useEffect(() => {
         if (account) {
             fetchWalletData();
@@ -117,18 +121,18 @@ function WalletAnalyzer({ account }) {
                     const errorMsg = data.result || data.message || 'Unknown API error';
                     console.warn(`API error for ${action}:`, errorMsg);
                     
-                    // Handle specific error cases
-                    if (errorMsg.includes('rate limit') || errorMsg.includes('too many requests')) {
-                        console.log(`Rate limited on ${action}, waiting longer...`);
+                    // Handle specific error cases - more conservative waiting
+                    if (errorMsg.includes('rate limit') || errorMsg.includes('too many requests') || errorMsg.includes('Max calls per sec')) {
+                        console.log(`Rate limited on ${action}, waiting much longer...`);
                         if (attempt < maxRetries) {
-                            const waitTime = 5000 * attempt; // 5s, 10s, 15s
+                            const waitTime = 8000 * attempt; // 8s, 16s, 24s - more conservative
                             console.log(`Waiting ${waitTime}ms before retry due to rate limit...`);
                             await new Promise(resolve => setTimeout(resolve, waitTime));
                             continue;
                         }
                     }
                     
-                    // For final attempt, accept empty results instead of failing
+                    // For final attempt, return empty results instead of failing
                     if (attempt === maxRetries) {
                         console.warn(`Final attempt failed for ${action}, returning empty result`);
                         return {
@@ -151,7 +155,7 @@ function WalletAnalyzer({ account }) {
                             result: []
                         };
                     }
-                    await new Promise(resolve => setTimeout(resolve, 1000 * attempt));
+                    await new Promise(resolve => setTimeout(resolve, 2000 * attempt));
                     continue;
                 }
                 
@@ -172,8 +176,8 @@ function WalletAnalyzer({ account }) {
                     };
                 }
                 
-                // Exponential backoff with longer waits
-                const waitTime = 2000 * Math.pow(2, attempt - 1); // 2s, 4s, 8s
+                // More conservative delays for rate limit handling
+                const waitTime = Math.min(5000 * Math.pow(2, attempt - 1), 20000); // 5s, 10s, 20s (max)
                 console.log(`Waiting ${waitTime}ms before retry...`);
                 await new Promise(resolve => setTimeout(resolve, waitTime));
             }
@@ -185,41 +189,71 @@ function WalletAnalyzer({ account }) {
         setError(null);
 
         try {
-            console.log('=== STARTING WALLET DATA FETCH ===');
+            console.log('=== STARTING SEQUENTIAL WALLET DATA FETCH ===');
             console.log('Account:', account);
+            console.log('Include Staking:', includeStaking);
             console.log('API Key (first 8 chars):', API_KEY.substring(0, 8) + '...');
             
-            // Add longer delays between requests to avoid rate limiting
-            console.log('Fetching normal transactions...');
+            // Sequential API calls with proper delays to respect rate limits (2/sec = 500ms minimum)
+            console.log('Step 1/5: Fetching normal transactions...');
             const txData = await fetchDataWithRetry('txlist');
             
-            console.log('Waiting 2 seconds before next request...');
-            await new Promise(resolve => setTimeout(resolve, 2000));
+            console.log('Waiting 1 second before next request...');
+            await new Promise(resolve => setTimeout(resolve, 1000));
             
-            console.log('Fetching NFT transfers...');
+            console.log('Step 2/5: Fetching NFT transfers...');
             const nftData = await fetchDataWithRetry('tokennfttx');
             
-            console.log('Waiting 2 seconds before next request...');
-            await new Promise(resolve => setTimeout(resolve, 2000));
+            console.log('Waiting 1 second before next request...');
+            await new Promise(resolve => setTimeout(resolve, 1000));
             
-            console.log('Fetching internal transactions...');
+            console.log('Step 3/5: Fetching internal transactions...');
             const internalData = await fetchDataWithRetry('txlistinternal');
             
-            console.log('Waiting 2 seconds before next request...');
-            await new Promise(resolve => setTimeout(resolve, 2000));
+            console.log('Waiting 1 second before next request...');
+            await new Promise(resolve => setTimeout(resolve, 1000));
             
-            console.log('Fetching token transfers...');
+            console.log('Step 4/5: Fetching token transfers...');
             const tokenData = await fetchDataWithRetry('tokentx');
 
-            console.log('=== API FETCH COMPLETE ===');
+            // Fetch staking rewards if checkbox is enabled
+            let stakingRewardsData = [];
+            if (includeStaking) {
+                console.log('Waiting 1 second before staking request...');
+                await new Promise(resolve => setTimeout(resolve, 1000));
+                
+                console.log('Step 5/5: Fetching staking rewards...');
+                stakingRewardsData = await fetchStakingRewards();
+                setStakingTransactions(stakingRewardsData);
+            } else {
+                setStakingTransactions([]);
+            }
+
+            console.log('=== SEQUENTIAL API FETCH COMPLETE ===');
             console.log('API Results:', {
                 txData: txData?.result?.length || 0,
                 nftData: nftData?.result?.length || 0,
                 internalData: internalData?.result?.length || 0,
-                tokenData: tokenData?.result?.length || 0
+                tokenData: tokenData?.result?.length || 0,
+                stakingRewards: stakingRewardsData.length || 0
             });
 
-            const processedTransactions = processWalletData(txData, nftData, internalData, tokenData);
+            // Validate all data before processing to prevent undefined errors
+            const validTxData = txData && txData.status ? txData : { status: '1', result: [] };
+            const validNftData = nftData && nftData.status ? nftData : { status: '1', result: [] };
+            const validInternalData = internalData && internalData.status ? internalData : { status: '1', result: [] };
+            const validTokenData = tokenData && tokenData.status ? tokenData : { status: '1', result: [] };
+            const validStakingData = Array.isArray(stakingRewardsData) ? stakingRewardsData : [];
+
+            console.log('Processing validated data...');
+            const processedTransactions = await processWalletData(
+                validTxData, 
+                validNftData, 
+                validInternalData, 
+                validTokenData, 
+                validStakingData
+            );
+            
             const analysisResult = calculateProfitLoss(processedTransactions);
 
             setTransactions(processedTransactions);
@@ -233,52 +267,70 @@ function WalletAnalyzer({ account }) {
         }
     };
 
-    const processWalletData = (txData, nftData, internalData, tokenData) => {
+    const processWalletData = async (txData, nftData, internalData, tokenData, stakingRewardsData = []) => {
+        console.log('=== PROCESSING WALLET DATA WITH VALIDATION ===');
+        
+        // Validate all input parameters to prevent undefined errors
+        const safeTxData = txData && typeof txData === 'object' ? txData : { status: '0', result: [] };
+        const safeNftData = nftData && typeof nftData === 'object' ? nftData : { status: '0', result: [] };
+        const safeInternalData = internalData && typeof internalData === 'object' ? internalData : { status: '0', result: [] };
+        const safeTokenData = tokenData && typeof tokenData === 'object' ? tokenData : { status: '0', result: [] };
+        const safeStakingData = Array.isArray(stakingRewardsData) ? stakingRewardsData : [];
+
+        console.log('Input validation results:', {
+            txData: { status: safeTxData.status, count: safeTxData.result?.length || 0 },
+            nftData: { status: safeNftData.status, count: safeNftData.result?.length || 0 },
+            internalData: { status: safeInternalData.status, count: safeInternalData.result?.length || 0 },
+            tokenData: { status: safeTokenData.status, count: safeTokenData.result?.length || 0 },
+            stakingData: { count: safeStakingData.length }
+        });
+
         const transactions = [];
         
-        // Build mappings - exactly like Python script
+        // Build mappings with safe data
         const txsById = {};
-        if (txData.status === '1' && Array.isArray(txData.result)) {
-            txData.result.forEach(tx => {
-                txsById[tx.hash] = tx;
+        if (safeTxData.status === '1' && Array.isArray(safeTxData.result)) {
+            safeTxData.result.forEach(tx => {
+                if (tx && tx.hash) {
+                    txsById[tx.hash] = tx;
+                }
             });
         }
 
         const nftByTx = {};
-        if (nftData.status === '1' && Array.isArray(nftData.result)) {
-            nftData.result.forEach(nft => {
-                if (!nftByTx[nft.hash]) nftByTx[nft.hash] = [];
-                nftByTx[nft.hash].push(nft);
+        if (safeNftData.status === '1' && Array.isArray(safeNftData.result)) {
+            safeNftData.result.forEach(nft => {
+                if (nft && nft.hash) {
+                    if (!nftByTx[nft.hash]) nftByTx[nft.hash] = [];
+                    nftByTx[nft.hash].push(nft);
+                }
             });
         }
 
         const internalByTx = {};
-        if (internalData.status === '1' && Array.isArray(internalData.result)) {
-            internalData.result.forEach(itx => {
-                if (!internalByTx[itx.hash]) internalByTx[itx.hash] = [];
-                internalByTx[itx.hash].push(itx);
+        if (safeInternalData.status === '1' && Array.isArray(safeInternalData.result)) {
+            safeInternalData.result.forEach(itx => {
+                if (itx && itx.hash) {
+                    if (!internalByTx[itx.hash]) internalByTx[itx.hash] = [];
+                    internalByTx[itx.hash].push(itx);
+                }
             });
         }
 
         const tokenByTx = {};
-        if (tokenData.status === '1' && Array.isArray(tokenData.result)) {
-            tokenData.result.forEach(token => {
-                if (!tokenByTx[token.hash]) tokenByTx[token.hash] = [];
-                tokenByTx[token.hash].push(token);
+        if (safeTokenData.status === '1' && Array.isArray(safeTokenData.result)) {
+            safeTokenData.result.forEach(token => {
+                if (token && token.hash) {
+                    if (!tokenByTx[token.hash]) tokenByTx[token.hash] = [];
+                    tokenByTx[token.hash].push(token);
+                }
             });
         }
 
-        // Add detailed logging at the start of processWalletData
-        console.log('=== PROCESSING WALLET DATA ===');
-        console.log('Input data status:');
-        console.log('  txData:', txData?.status, 'count:', txData?.result?.length || 0);
-        console.log('  nftData:', nftData?.status, 'count:', nftData?.result?.length || 0);
-        console.log('  internalData:', internalData?.status, 'count:', internalData?.result?.length || 0);
-        console.log('  tokenData:', tokenData?.status, 'count:', tokenData?.result?.length || 0);
-
         // Process normal transactions FIRST (exactly like Python script)
-        if (txData.status === '1' && Array.isArray(txData.result)) {
-            txData.result.forEach(tx => {
+        if (safeTxData.status === '1' && Array.isArray(safeTxData.result)) {
+            safeTxData.result.forEach(tx => {
+                if (!tx || !tx.hash) return; // Skip invalid transactions
                 const date = new Date(parseInt(tx.timeStamp) * 1000);
                 
                 // Label as Payment or Deposit (exact same logic as Python)
@@ -325,8 +377,9 @@ function WalletAnalyzer({ account }) {
 
         // Process token transfers (ERC-20) - Only those NOT part of NFT transactions (exactly like Python)
         const processedTxHashes = new Set();
-        if (tokenData.status === '1' && Array.isArray(tokenData.result)) {
-            tokenData.result.forEach(tokenTx => {
+        if (safeTokenData.status === '1' && Array.isArray(safeTokenData.result)) {
+            safeTokenData.result.forEach(tokenTx => {
+                if (!tokenTx || !tokenTx.hash) return; // Skip invalid tokens
                 const txHash = tokenTx.hash;
                 
                 // Skip if this is part of an NFT transaction (like Python script)
@@ -385,12 +438,13 @@ function WalletAnalyzer({ account }) {
         const burnTransactions = {};
         const burnedTokenIds = new Set();
         
-        if (nftData.status === '1' && Array.isArray(nftData.result)) {
+        if (safeNftData.status === '1' && Array.isArray(safeNftData.result)) {
             // First pass: identify potential burn/mint pairs (like Python script)
             const outgoingByTime = {};
             const incomingByTime = {};
             
-            nftData.result.forEach(nft => {
+            safeNftData.result.forEach(nft => {
+                if (!nft || !nft.hash) return; // Skip invalid NFTs
                 const timestamp = parseInt(nft.timeStamp);
                 const timeKey = Math.floor(timestamp / 60); // Round to nearest minute
                 
@@ -461,8 +515,9 @@ function WalletAnalyzer({ account }) {
         }
 
         // Process NFT transfers (exactly like Python script - INDEPENDENT of regular transactions)
-        if (nftData.status === '1' && Array.isArray(nftData.result)) {
-            nftData.result.forEach(nft => {
+        if (safeNftData.status === '1' && Array.isArray(safeNftData.result)) {
+            safeNftData.result.forEach(nft => {
+                if (!nft || !nft.hash) return; // Skip invalid NFTs
                 const txHash = nft.hash;
                 const date = new Date(parseInt(nft.timeStamp) * 1000);
                 
@@ -931,6 +986,12 @@ function WalletAnalyzer({ account }) {
             }
         });
 
+        // Add staking rewards if provided
+        if (stakingRewardsData && stakingRewardsData.length > 0) {
+            console.log(`📈 Adding ${stakingRewardsData.length} staking reward transactions`);
+            transactions.push(...stakingRewardsData);
+        }
+
         // Sort by date (like Python script)
         transactions.sort((a, b) => b.date - a.date); // Changed from a.date - b.date
         
@@ -948,11 +1009,12 @@ function WalletAnalyzer({ account }) {
     };
 
     const calculateProfitLoss = (transactions) => {
-        // Implement exact same logic as profit_loss.py but handle transfers
+        // Implement exact same logic as profit_loss.py but handle transfers and staking rewards
         const nftPurchases = {};
         let totalProfit = 0;
         let totalLoss = 0;
         let nftTrades = 0;
+        let totalStakingRewards = 0;
 
         // First pass: record NFT purchases (including paid mints, but NOT transfers)
         transactions.forEach((tx, index) => {
@@ -1064,6 +1126,18 @@ function WalletAnalyzer({ account }) {
             if (tx.label === 'NFT Transfer (In)' && tx.isTransfer) {
                 tx.comment += ' (Transfer - no cost basis recorded)';
             }
+            
+            // **NEW**: Handle APE Staking Rewards as profit
+            if (tx.label === 'APE Staking Reward') {
+                const stakingAmount = parseFloat(tx.incomingAmount) || 0;
+                if (stakingAmount > 0) {
+                    totalStakingRewards += stakingAmount;
+                    totalProfit += stakingAmount;
+                    tx.profit = stakingAmount;
+                    tx.comment += ` (Staking reward: ${stakingAmount.toFixed(4)} APE profit)`;
+                    console.log(`Added staking reward to profit: ${stakingAmount} APE`);
+                }
+            }
         });
 
         return {
@@ -1071,7 +1145,8 @@ function WalletAnalyzer({ account }) {
             totalLoss,
             netProfit: totalProfit - totalLoss,
             nftTrades,
-            totalTransactions: transactions.length
+            totalTransactions: transactions.length,
+            totalStakingRewards
         };
     };
 
@@ -1595,6 +1670,66 @@ function WalletAnalyzer({ account }) {
         );
     };
 
+    const fetchStakingRewards = async () => {
+        const STAKING_CONTRACT = '0x4Ba2396086d52cA68a37D9C0FA364286e9c7835a';
+        const stakingRewards = [];
+        
+        try {
+            console.log('🔍 Fetching staking rewards from internal transactions...');
+            
+            // Fetch internal transactions specifically for staking detection
+            const internalStakingUrl = `${BASE_URL}?module=account&action=txlistinternal&address=${account}&startblock=0&endblock=99999999&sort=desc&apikey=${API_KEY}`;
+            const response = await axios.get(internalStakingUrl, { timeout: 30000 });
+            
+            if (response.data.status === '1' && Array.isArray(response.data.result)) {
+                console.log(`📊 Found ${response.data.result.length} internal transactions, checking for staking rewards...`);
+                
+                response.data.result.forEach(tx => {
+                    // Check if this is a staking reward: FROM staking contract TO our wallet
+                    if (tx.from.toLowerCase() === STAKING_CONTRACT.toLowerCase() && 
+                        tx.to.toLowerCase() === account.toLowerCase()) {
+                        
+                        const rewardAmount = parseInt(tx.value) / 1e18;
+                        
+                        // Only include meaningful rewards (filter out dust/zero amounts)
+                        if (rewardAmount > 0.001) {
+                            const date = new Date(parseInt(tx.timeStamp) * 1000);
+                            
+                            stakingRewards.push({
+                                hash: tx.hash,
+                                date: date,
+                                label: 'APE Staking Reward',
+                                outgoingAsset: '',
+                                outgoingAmount: '',
+                                incomingAsset: 'APE',
+                                incomingAmount: rewardAmount.toFixed(6),
+                                feeAsset: '',
+                                feeAmount: '',
+                                comment: `Staking reward received from APE staking contract (${rewardAmount.toFixed(4)} APE)`,
+                                type: 'staking_reward',
+                                isStakingReward: true
+                            });
+                            
+                            console.log(`✅ Found staking reward: ${rewardAmount.toFixed(4)} APE on ${date.toDateString()}`);
+                        }
+                    }
+                });
+                
+                console.log(`🎯 Total staking rewards found: ${stakingRewards.length}`);
+            } else {
+                console.log('⚠️ No internal transactions found or API error');
+            }
+            
+        } catch (error) {
+            console.error('❌ Error fetching staking rewards:', error);
+            // Don't throw error - just return empty array so main analysis continues
+        }
+        
+        return stakingRewards;
+    };
+
+    // Remove the parallel fetchAllData function - use only sequential fetchWalletData
+
     if (loading) {
         return (
             <div className="analysis-section">
@@ -1645,6 +1780,12 @@ function WalletAnalyzer({ account }) {
                             <div className="stat-value">{analysis.totalLoss.toFixed(4)} APE</div>
                             <div className="stat-label">Total Loss</div>
                         </div>
+                        <div className="stat-card" style={{borderLeftColor: '#8b5cf6'}}>
+                            <div className="stat-value" style={{color: '#8b5cf6'}}>
+                                {(analysis.totalStakingRewards || 0).toFixed(4)} APE
+                            </div>
+                            <div className="stat-label">Staking Rewards</div>
+                        </div>
                         <div className="stat-card" style={{borderLeftColor: analysis.netProfit >= 0 ? '#10b981' : '#ef4444'}}>
                             <div className="stat-value" style={{color: analysis.netProfit >= 0 ? '#10b981' : '#ef4444'}}>
                                 {analysis.netProfit >= 0 ? '+' : ''}{analysis.netProfit.toFixed(4)} APE
@@ -1670,6 +1811,106 @@ function WalletAnalyzer({ account }) {
                     <NFTTradingChart transactions={transactions} />
                 </div>
             )}
+
+            {/* Staking Options - moved above transaction table */}
+            <div className="analysis-section">
+                <div style={{
+                    display: 'flex', 
+                    alignItems: 'center', 
+                    gap: '12px',
+                    padding: '16px',
+                    backgroundColor: '#374151',
+                    borderRadius: '8px',
+                    marginBottom: '20px'
+                }}>
+                    <input
+                        type="checkbox"
+                        id="includeStaking"
+                        checked={includeStaking}
+                        onChange={(e) => setIncludeStaking(e.target.checked)}
+                        style={{
+                            width: '18px',
+                            height: '18px',
+                            cursor: 'pointer'
+                        }}
+                    />
+                    <label 
+                        htmlFor="includeStaking"
+                        style={{
+                            color: '#e5e7eb',
+                            cursor: 'pointer',
+                            fontSize: '16px',
+                            fontWeight: '500'
+                        }}
+                    >
+                        🥩 Include APE Staking Rewards
+                    </label>
+                    {stakingTransactions.length > 0 && (
+                        <span style={{
+                            backgroundColor: '#10b981',
+                            color: '#ffffff',
+                            padding: '4px 12px',
+                            borderRadius: '12px',
+                            fontSize: '14px',
+                            fontWeight: '600'
+                        }}>
+                            {stakingTransactions.length} rewards found
+                        </span>
+                    )}
+                </div>
+                
+                {includeStaking && (
+                    <div style={{
+                        backgroundColor: '#1f2937',
+                        border: '1px solid #374151',
+                        borderRadius: '8px',
+                        padding: '16px',
+                        marginBottom: '20px'
+                    }}>
+                        <div style={{color: '#9ca3af', fontSize: '14px', lineHeight: '1.6'}}>
+                            <strong>ℹ️ About Staking Detection:</strong>
+                            <br />
+                            • Automatically detects APE staking rewards from internal transactions
+                            <br />
+                            • Shows rewards received from the official staking contract
+                            <br />
+                            • Only includes rewards above 0.001 APE (filters out dust)
+                            <br />
+                            • Re-analyze after checking this box to fetch staking data
+                        </div>
+                        
+                        {!loading && includeStaking && stakingTransactions.length === 0 && (
+                            <div style={{
+                                color: '#fbbf24',
+                                marginTop: '12px',
+                                padding: '8px',
+                                backgroundColor: 'rgba(251, 191, 36, 0.1)',
+                                borderRadius: '4px'
+                            }}>
+                                ⚠️ No staking rewards detected. Click "🔄 Re-analyze" to fetch staking data.
+                            </div>
+                        )}
+                    </div>
+                )}
+                
+                {includeStaking && (
+                    <div style={{textAlign: 'center', marginBottom: '20px'}}>
+                        <button 
+                            className="connect-btn" 
+                            onClick={fetchWalletData}
+                            disabled={loading}
+                            style={{
+                                padding: '12px 24px',
+                                fontSize: '16px',
+                                backgroundColor: loading ? '#6b7280' : '#3b82f6',
+                                cursor: loading ? 'not-allowed' : 'pointer'
+                            }}
+                        >
+                            {loading ? '⏳ Analyzing...' : '🔄 Re-analyze with Staking Data'}
+                        </button>
+                    </div>
+                )}
+            </div>
 
             <div className="analysis-section">
                 <h2>📋 Transaction History</h2>
@@ -1707,6 +1948,7 @@ function WalletAnalyzer({ account }) {
                                         Incoming{getSortIndicator('incomingAmount')}
                                     </th>
                                     <th 
+ 
                                         onClick={() => handleSort('feeAsset')}
                                         style={{cursor: 'pointer', userSelect: 'none'}}
                                         title="Click to sort by fee asset"
@@ -1721,6 +1963,7 @@ function WalletAnalyzer({ account }) {
                                         Fee Amount{getSortIndicator('feeAmount')}
                                     </th>
                                     <th 
+ 
                                         onClick={() => handleSort('profit')}
                                         style={{cursor: 'pointer', userSelect: 'none'}}
                                         title="Click to sort by P&L"
@@ -1750,7 +1993,7 @@ function WalletAnalyzer({ account }) {
                                     </th>
                                     <th 
                                         onClick={() => handleSort('hash')}
-                                        style={{cursor: 'pointer', userSelect: 'none'}}
+                                                                               style={{cursor: 'pointer', userSelect: 'none'}}
                                         title="Click to sort by transaction ID"
                                     >
                                         Trx. ID{getSortIndicator('hash')}
