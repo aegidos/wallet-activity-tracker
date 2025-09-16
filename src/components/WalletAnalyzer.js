@@ -1,18 +1,140 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import axios from 'axios';
 import { format } from 'date-fns';
 import { ScatterChart, Scatter, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell } from 'recharts';
+import { Alchemy, Network } from 'alchemy-sdk';
 
+// Global TON provider protection - runs immediately when module loads
+if (typeof window !== 'undefined') {
+    // Create a safe proxy for window.ton to prevent undefined access errors
+    const tonHandler = {
+        get(target, prop) {
+            if (!target || typeof target !== 'object') {
+                console.warn(`TON provider not ready - attempted to access: ${String(prop)}`);
+                return undefined;
+            }
+            return target[prop];
+        }
+    };
+    
+    // Monitor and protect window.ton
+    let tonProvider = null;
+    
+    Object.defineProperty(window, 'ton', {
+        get() {
+            return tonProvider ? new Proxy(tonProvider, tonHandler) : undefined;
+        },
+        set(value) {
+            console.log('TON provider initialized:', !!value);
+            tonProvider = value;
+        },
+        configurable: true,
+        enumerable: true
+    });
+    
+    // Additional safety: catch any unhandled TON-related errors
+    window.addEventListener('error', (event) => {
+        if (event.error && event.error.message && event.error.message.includes('ton')) {
+            console.warn('Caught TON-related error:', event.error.message);
+            event.preventDefault(); // Prevent the error from bubbling up
+            return false;
+        }
+    });
+}
 
+const ALCHEMY_API_KEY = process.env.NEXT_PUBLIC_ALCHEMY_API_KEY || 'Lx58kkNIJtKmG_mSohRWLvxzxJj_iNW-';
 const API_KEY = process.env.REACT_APP_APESCAN_API_KEY || '8AIZVW9PAGT3UY6FCGRZFDJ51SZGDIG13X';
 const BASE_URL = 'https://api.apescan.io/api';
 const ZERO_ADDRESS = '0x0000000000000000000000000000000000000000';
+
+// Initialize Alchemy SDK for all supported networks
+const initializeAlchemySDK = (network) => {
+    let alchemyNetwork;
+    
+    switch (network) {
+        case 'ethereum':
+            alchemyNetwork = Network.ETH_MAINNET;
+            break;
+        case 'apechain':
+            alchemyNetwork = 'apechain-mainnet'; // Custom network for ApeChain
+            break;
+        case 'bnb':
+            alchemyNetwork = Network.BNB_MAINNET;
+            break;
+        case 'solana':
+            alchemyNetwork = Network.SOLANA_MAINNET;
+            break;
+        default:
+            throw new Error(`Unsupported network: ${network}`);
+    }
+    
+    const config = {
+        apiKey: ALCHEMY_API_KEY,
+        network: alchemyNetwork
+    };
+    
+    console.log(`Initializing Alchemy SDK for ${network} with network: ${alchemyNetwork}`);
+    return new Alchemy(config);
+};
+
+// Enhanced TON provider check and account request function
+async function requestAccounts() {
+    // Multiple layers of safety checks
+    if (typeof window === 'undefined') {
+        console.log("Window object not available (SSR environment)");
+        return [];
+    }
+    
+    // Wait a bit to ensure extensions have loaded
+    await new Promise(resolve => setTimeout(resolve, 100));
+    
+    try {
+        // Check if ton exists and is properly initialized
+        if (!window.ton || typeof window.ton !== 'object') {
+            console.log("TON provider not found or not properly initialized.");
+            return [];
+        }
+
+        // Check if requestAccounts method exists
+        if (typeof window.ton.requestAccounts !== 'function') {
+            console.log("TON provider found but requestAccounts method not available.");
+            return [];
+        }
+
+        const accounts = await window.ton.requestAccounts();
+        return Array.isArray(accounts) ? accounts : [];
+        
+    } catch (err) {
+        console.warn("Failed to fetch TON accounts:", err.message || err);
+        return [];
+    }
+}
 
 function WalletAnalyzer({ account }) {
     const [transactions, setTransactions] = useState([]);
     const [analysis, setAnalysis] = useState(null);
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState(null);
+    const [tokenBalances, setTokenBalances] = useState({
+        ethereum: [],
+        apechain: [],
+        bnb: [],
+        solana: []
+    });
+    const [nativeBalances, setNativeBalances] = useState({
+        ethereum: 0, // ETH balance
+        apechain: 0, // APE balance
+        bnb: 0,      // BNB balance
+        solana: 0    // SOL balance
+    });
+    const [tokenPrices, setTokenPrices] = useState({});
+    const [totalTokenValueUSD, setTotalTokenValueUSD] = useState(0);
+    const [networkTotals, setNetworkTotals] = useState({
+        ethereum: 0,
+        apechain: 0,
+        bnb: 0,
+        solana: 0
+    });
     
     // Add sorting state
     const [sortConfig, setSortConfig] = useState({
@@ -23,12 +145,670 @@ function WalletAnalyzer({ account }) {
     // Add this state after the other useState declarations
     const [includeStaking, setIncludeStaking] = useState(false);
     const [stakingTransactions, setStakingTransactions] = useState([]);
+    const [apeChurchRewards, setApeChurchRewards] = useState([]);
+    const [raffleRewards, setRaffleRewards] = useState([]);
+
+    // Fetch token prices using free APIs (Alchemy + Binance fallback)
+    const fetchTokenPrices = async (tokens) => {
+        try {
+            const priceMap = {};
+            
+            // First, try to get prices from Binance API (free)
+            const binancePrices = await fetchBinancePrices(tokens);
+            Object.assign(priceMap, binancePrices);
+            
+            // For tokens not found on Binance, try other free sources
+            const missingTokens = tokens.filter(token => !priceMap[token.contractAddress.toLowerCase()]);
+            if (missingTokens.length > 0) {
+                const alternatePrices = await fetchAlternatePrices(missingTokens);
+                Object.assign(priceMap, alternatePrices);
+            }
+
+            return priceMap;
+        } catch (err) {
+            console.error('Error fetching token prices:', err);
+            return {};
+        }
+    };
+
+    // Fetch prices from Binance API (free)
+    const fetchBinancePrices = async (tokens) => {
+        try {
+            const priceMap = {};
+            
+            // Get all Binance trading pairs
+            const response = await fetch('https://api.binance.com/api/v3/ticker/price');
+            const binancePrices = await response.json();
+            
+            // Create a map of symbol to USD price
+            const symbolPriceMap = {};
+            binancePrices.forEach(item => {
+                if (item.symbol.endsWith('USDT')) {
+                    const symbol = item.symbol.replace('USDT', '');
+                    symbolPriceMap[symbol] = parseFloat(item.price);
+                }
+            });
+            
+            // Match tokens by symbol
+            tokens.forEach(token => {
+                const symbol = token.symbol?.toUpperCase();
+                if (symbol && symbolPriceMap[symbol]) {
+                    priceMap[token.contractAddress.toLowerCase()] = symbolPriceMap[symbol];
+                }
+            });
+            
+            console.log(`Found prices for ${Object.keys(priceMap).length} tokens via Binance`);
+            return priceMap;
+        } catch (err) {
+            console.warn('Failed to fetch Binance prices:', err);
+            return {};
+        }
+    };
+
+    // Fetch prices from alternate free sources
+    const fetchAlternatePrices = async (tokens) => {
+        try {
+            const priceMap = {};
+            
+            // Try CryptoCompare API (free tier)
+            for (const token of tokens.slice(0, 10)) { // Limit to avoid rate limits
+                try {
+                    if (!token.symbol) continue;
+                    
+                    const response = await fetch(
+                        `https://min-api.cryptocompare.com/data/price?fsym=${token.symbol.toUpperCase()}&tsyms=USD&api_key=demo`
+                    );
+                    const data = await response.json();
+                    
+                    if (data.USD && data.USD > 0) {
+                        priceMap[token.contractAddress.toLowerCase()] = data.USD;
+                    }
+                    
+                    // Small delay to avoid rate limiting
+                    await new Promise(resolve => setTimeout(resolve, 100));
+                } catch (err) {
+                    console.warn(`Failed to fetch price for ${token.symbol}:`, err);
+                }
+            }
+            
+            console.log(`Found prices for ${Object.keys(priceMap).length} tokens via alternate sources`);
+            return priceMap;
+        } catch (err) {
+            console.warn('Failed to fetch alternate prices:', err);
+            return {};
+        }
+    };
+
+    // Fetch native token prices (ETH, APE, BNB, and SOL)
+    const fetchNativeTokenPrices = async () => {
+        try {
+            const nativePrices = {};
+            
+            // Fetch native token prices from Binance
+            const response = await fetch('https://api.binance.com/api/v3/ticker/price');
+            const binancePrices = await response.json();
+            
+            // Find ETH price
+            const ethPrice = binancePrices.find(item => item.symbol === 'ETHUSDT');
+            if (ethPrice) {
+                nativePrices['ethereum-native'] = parseFloat(ethPrice.price);
+            }
+            
+            // Find APE price  
+            const apePrice = binancePrices.find(item => item.symbol === 'APEUSDT');
+            if (apePrice) {
+                nativePrices['apechain-native'] = parseFloat(apePrice.price);
+            }
+            
+            // Find BNB price
+            const bnbPrice = binancePrices.find(item => item.symbol === 'BNBUSDT');
+            if (bnbPrice) {
+                nativePrices['bnb-native'] = parseFloat(bnbPrice.price);
+            }
+            
+            // Find SOL price
+            const solPrice = binancePrices.find(item => item.symbol === 'SOLUSDT');
+            if (solPrice) {
+                nativePrices['solana-native'] = parseFloat(solPrice.price);
+            }
+            
+            console.log('Native token prices:', nativePrices);
+            return nativePrices;
+        } catch (err) {
+            console.warn('Failed to fetch native token prices:', err);
+            return {};
+        }
+    };
+
+    // Fetch native balances (ETH, APE, BNB, SOL)
+    const fetchNativeBalances = async () => {
+        try {
+            const ethereumAlchemy = initializeAlchemySDK('ethereum');
+            const apechainAlchemy = initializeAlchemySDK('apechain');
+            const bnbAlchemy = initializeAlchemySDK('bnb');
+            const solanaAlchemy = initializeAlchemySDK('solana');
+
+            // Fetch ETH balance on Ethereum
+            const ethBalance = await ethereumAlchemy.core.getBalance(account);
+            const ethBalanceFormatted = parseFloat(ethBalance.toString()) / 1e18;
+
+            // Fetch APE balance on ApeChain
+            const apeBalance = await apechainAlchemy.core.getBalance(account);
+            const apeBalanceFormatted = parseFloat(apeBalance.toString()) / 1e18;
+
+            // Fetch BNB balance on BNB Chain
+            const bnbBalance = await bnbAlchemy.core.getBalance(account);
+            const bnbBalanceFormatted = parseFloat(bnbBalance.toString()) / 1e18;
+
+            // Fetch SOL balance on Solana (note: SOL uses different decimals - 9 instead of 18)
+            let solBalanceFormatted = 0;
+            try {
+                const solBalance = await solanaAlchemy.core.getBalance(account);
+                solBalanceFormatted = parseFloat(solBalance.toString()) / 1e9;
+            } catch (solanaError) {
+                console.warn('Failed to fetch SOL balance:', solanaError.message);
+                solBalanceFormatted = 0;
+            }
+
+            setNativeBalances({
+                ethereum: ethBalanceFormatted,
+                apechain: apeBalanceFormatted,
+                bnb: bnbBalanceFormatted,
+                solana: solBalanceFormatted
+            });
+
+            console.log(`Native balances - ETH: ${ethBalanceFormatted.toFixed(6)}, APE: ${apeBalanceFormatted.toFixed(6)}, BNB: ${bnbBalanceFormatted.toFixed(6)}, SOL: ${solBalanceFormatted.toFixed(6)}`);
+        } catch (err) {
+            console.error('Error fetching native balances:', err);
+            setNativeBalances({
+                ethereum: 0,
+                apechain: 0,
+                bnb: 0,
+                solana: 0
+            });
+        }
+    };
+
+    // Fetch token balances for both networks
+    const fetchTokenBalances = async () => {
+        if (!account) return;
+
+        setLoading(true);
+        try {
+            // Fetch Ethereum Mainnet token balances with metadata
+            const ethereumAlchemy = initializeAlchemySDK('ethereum');
+            const ethereumBalances = await ethereumAlchemy.core.getTokenBalances(account, {
+                type: 'erc20',
+                maxCount: 100
+            });
+
+            // Fetch ApeChain token balances with metadata
+            const apechainAlchemy = initializeAlchemySDK('apechain');
+            const apechainBalances = await apechainAlchemy.core.getTokenBalances(account, {
+                type: 'erc20',
+                maxCount: 100
+            });
+
+            // Fetch BNB Chain token balances with metadata
+            const bnbAlchemy = initializeAlchemySDK('bnb');
+            const bnbBalances = await bnbAlchemy.core.getTokenBalances(account, {
+                type: 'erc20',
+                maxCount: 100
+            });
+
+            // Fetch Solana token balances with metadata (different API for non-EVM chain)
+            let solanaBalances = { tokenBalances: [] };
+            try {
+                const solanaAlchemy = initializeAlchemySDK('solana');
+                // For Solana, we need to use a different method
+                // Solana uses getTokenBalances but without the 'type' parameter
+                solanaBalances = await solanaAlchemy.core.getTokenBalances(account);
+                console.log('Solana token balances fetched successfully:', solanaBalances);
+            } catch (solanaError) {
+                console.warn('Failed to fetch Solana token balances, skipping:', solanaError.message);
+                solanaBalances = { tokenBalances: [] };
+            }
+
+            // Fetch metadata for each token and check for built-in price data
+            const enrichTokenData = async (alchemy, tokenBalances, networkName = 'Unknown') => {
+                if (!tokenBalances || tokenBalances.length === 0) {
+                    return [];
+                }
+                
+                const enrichedBalances = await Promise.all(
+                    tokenBalances.map(async (token) => {
+                        try {
+                            // For Solana, the token structure might be different
+                            const tokenAddress = token.contractAddress || token.mint || token.address;
+                            if (!tokenAddress) {
+                                console.warn(`No token address found for token on ${networkName}:`, token);
+                                return {
+                                    ...token,
+                                    name: 'Unknown Token',
+                                    symbol: 'N/A',
+                                    decimals: networkName === 'Solana' ? 9 : 18,
+                                    logo: null,
+                                    alchemyPrice: null,
+                                };
+                            }
+                            
+                            const metadata = await alchemy.core.getTokenMetadata(tokenAddress);
+                            
+                            // Check if Alchemy provides price data in metadata
+                            let alchemyPrice = null;
+                            if (metadata.price || metadata.usdPrice || metadata.priceUsd) {
+                                alchemyPrice = metadata.price || metadata.usdPrice || metadata.priceUsd;
+                            }
+                            
+                            return {
+                                ...token, // Preserve original token data including tokenBalance
+                                contractAddress: tokenAddress, // Ensure we have a consistent contractAddress field
+                                name: metadata.name || 'Unknown Token',
+                                symbol: metadata.symbol || 'N/A',
+                                decimals: metadata.decimals || (networkName === 'Solana' ? 9 : 18),
+                                logo: metadata.logo || null,
+                                alchemyPrice: alchemyPrice, // Store any price data from Alchemy
+                            };
+                        } catch (err) {
+                            console.warn(`Failed to fetch metadata for token ${token.contractAddress || token.mint || 'unknown'} on ${networkName}:`, err);
+                            return {
+                                ...token, // Preserve original token data
+                                name: 'Unknown Token',
+                                symbol: 'N/A',
+                                decimals: networkName === 'Solana' ? 9 : 18,
+                                logo: null,
+                                alchemyPrice: null,
+                            };
+                        }
+                    })
+                );
+                return enrichedBalances;
+            };
+
+            const enrichedEthereumBalances = await enrichTokenData(ethereumAlchemy, ethereumBalances.tokenBalances, 'Ethereum');
+            const enrichedApeChainBalances = await enrichTokenData(apechainAlchemy, apechainBalances.tokenBalances, 'ApeChain');
+            const enrichedBnbBalances = await enrichTokenData(bnbAlchemy, bnbBalances.tokenBalances, 'BNB Chain');
+            
+            // Handle Solana tokens separately (they may have different metadata structure)
+            let enrichedSolanaBalances = [];
+            try {
+                const solanaAlchemy = initializeAlchemySDK('solana');
+                enrichedSolanaBalances = await enrichTokenData(solanaAlchemy, solanaBalances.tokenBalances || [], 'Solana');
+            } catch (solanaError) {
+                console.warn('Failed to enrich Solana token data:', solanaError.message);
+                enrichedSolanaBalances = [];
+            }
+
+            // Debug logging to see token structure
+            console.log('Raw Ethereum Balances:', ethereumBalances.tokenBalances);
+            console.log('Enriched Ethereum Balances:', enrichedEthereumBalances);
+            console.log('Raw ApeChain Balances:', apechainBalances.tokenBalances);
+            console.log('Enriched ApeChain Balances:', enrichedApeChainBalances);
+            console.log('Raw BNB Balances:', bnbBalances.tokenBalances);
+            console.log('Enriched BNB Balances:', enrichedBnbBalances);
+            console.log('Raw Solana Balances:', solanaBalances.tokenBalances);
+            console.log('Enriched Solana Balances:', enrichedSolanaBalances);
+
+            // Fetch native balances
+            await fetchNativeBalances();
+
+            // Combine all tokens for price fetching
+            const allTokens = [...enrichedEthereumBalances, ...enrichedApeChainBalances, ...enrichedBnbBalances, ...enrichedSolanaBalances];
+            
+            // Start with Alchemy prices (if available)
+            const alchemyPrices = {};
+            allTokens.forEach(token => {
+                if (token.alchemyPrice && token.alchemyPrice > 0) {
+                    alchemyPrices[token.contractAddress.toLowerCase()] = token.alchemyPrice;
+                }
+            });
+            
+            // Fetch additional prices for tokens without Alchemy prices
+            const tokensNeedingPrices = allTokens.filter(token => !alchemyPrices[token.contractAddress.toLowerCase()]);
+            const externalPrices = await fetchTokenPrices(tokensNeedingPrices);
+            
+            // Add native token prices (ETH and APE)
+            const nativePrices = await fetchNativeTokenPrices();
+            
+            // Combine all price sources (Alchemy takes priority)
+            const combinedPrices = { ...externalPrices, ...alchemyPrices, ...nativePrices };
+            setTokenPrices(combinedPrices);
+            
+            console.log(`Price sources: ${Object.keys(alchemyPrices).length} from Alchemy, ${Object.keys(externalPrices).length} from external APIs, ${Object.keys(nativePrices).length} native tokens`);
+
+            // Calculate total USD value with improved error handling
+            let totalUSD = 0;
+            let tokenBreakdown = {
+                ethereum: 0,
+                apechain: 0,
+                bnb: 0,
+                solana: 0
+            };
+            
+            // Helper function to safely calculate token value
+            const calculateTokenValue = (token, networkName) => {
+                try {
+                    let rawBalance = token.tokenBalance;
+                    
+                    // Handle different balance formats more safely
+                    if (typeof rawBalance === 'string') {
+                        if (rawBalance.startsWith('0x')) {
+                            rawBalance = parseInt(rawBalance, 16);
+                        } else {
+                            rawBalance = parseFloat(rawBalance) || 0;
+                        }
+                    } else if (typeof rawBalance === 'number') {
+                        rawBalance = rawBalance;
+                    } else {
+                        console.warn(`Invalid balance format for token ${token.symbol} on ${networkName}:`, rawBalance);
+                        return 0;
+                    }
+                    
+                    // Validate balance is not NaN or negative
+                    if (isNaN(rawBalance) || rawBalance < 0) {
+                        console.warn(`Invalid balance value for token ${token.symbol} on ${networkName}:`, rawBalance);
+                        return 0;
+                    }
+                    
+                    const decimals = token.decimals || (networkName === 'Solana' ? 9 : 18);
+                    const balance = rawBalance / Math.pow(10, decimals);
+                    
+                    // Get price with multiple fallbacks
+                    let price = 0;
+                    const contractAddr = token.contractAddress?.toLowerCase();
+                    const mintAddr = token.mint?.toLowerCase();
+                    
+                    if (contractAddr && combinedPrices[contractAddr]) {
+                        price = combinedPrices[contractAddr];
+                    } else if (mintAddr && combinedPrices[mintAddr]) {
+                        price = combinedPrices[mintAddr];
+                    } else if (token.alchemyPrice && token.alchemyPrice > 0) {
+                        price = token.alchemyPrice;
+                    }
+                    
+                    // Override price for APES IN SPACE token
+                    if (token.name && token.name.toLowerCase().includes('apes in space')) {
+                        price = 0;
+                    }
+                    
+                    // Validate price
+                    if (isNaN(price) || price < 0) {
+                        price = 0;
+                    }
+                    
+                    const tokenValue = balance * price;
+                    
+                    // Log suspicious values
+                    if (tokenValue > 1000000) { // Values over $1M seem suspicious
+                        console.warn(`⚠️  Suspicious high value detected for ${token.symbol} on ${networkName}:`);
+                        console.warn(`   Balance: ${balance.toFixed(6)}`);
+                        console.warn(`   Price: $${price.toFixed(6)}`);
+                        console.warn(`   Value: $${tokenValue.toFixed(2)}`);
+                        console.warn(`   Raw Balance: ${rawBalance}`);
+                        console.warn(`   Decimals: ${decimals}`);
+                    }
+                    
+                    return isNaN(tokenValue) ? 0 : tokenValue;
+                } catch (error) {
+                    console.error(`Error calculating value for token ${token.symbol} on ${networkName}:`, error);
+                    return 0;
+                }
+            };
+            
+            // Calculate token values by network with error handling
+            enrichedEthereumBalances.forEach(token => {
+                const tokenValue = calculateTokenValue(token, 'Ethereum');
+                tokenBreakdown.ethereum += tokenValue;
+                totalUSD += tokenValue;
+            });
+            
+            enrichedApeChainBalances.forEach(token => {
+                const tokenValue = calculateTokenValue(token, 'ApeChain');
+                tokenBreakdown.apechain += tokenValue;
+                totalUSD += tokenValue;
+            });
+            
+            enrichedBnbBalances.forEach(token => {
+                const tokenValue = calculateTokenValue(token, 'BNB Chain');
+                tokenBreakdown.bnb += tokenValue;
+                totalUSD += tokenValue;
+            });
+            
+            enrichedSolanaBalances.forEach(token => {
+                const tokenValue = calculateTokenValue(token, 'Solana');
+                tokenBreakdown.solana += tokenValue;
+                totalUSD += tokenValue;
+            });
+            
+            // Add native balances to total
+            const ethPrice = combinedPrices['ethereum-native'] || 0;
+            const apePrice = combinedPrices['apechain-native'] || 0;
+            const bnbPrice = combinedPrices['bnb-native'] || 0;
+            const solPrice = combinedPrices['solana-native'] || 0;
+            
+            const nativeValues = {
+                ethereum: (nativeBalances.ethereum || 0) * ethPrice,
+                apechain: (nativeBalances.apechain || 0) * apePrice,
+                bnb: (nativeBalances.bnb || 0) * bnbPrice,
+                solana: (nativeBalances.solana || 0) * solPrice
+            };
+            
+            totalUSD += nativeValues.ethereum;
+            totalUSD += nativeValues.apechain;
+            totalUSD += nativeValues.bnb;
+            totalUSD += nativeValues.solana;
+            
+            // Enhanced logging for debugging
+            console.log('=== TOTAL VALUE BREAKDOWN ===');
+            console.log('Token Values by Network:');
+            console.log(`  Ethereum Tokens: $${tokenBreakdown.ethereum.toFixed(2)} (${enrichedEthereumBalances.length} tokens)`);
+            console.log(`  ApeChain Tokens: $${tokenBreakdown.apechain.toFixed(2)} (${enrichedApeChainBalances.length} tokens)`);
+            console.log(`  BNB Chain Tokens: $${tokenBreakdown.bnb.toFixed(2)} (${enrichedBnbBalances.length} tokens)`);
+            console.log(`  Solana Tokens: $${tokenBreakdown.solana.toFixed(2)} (${enrichedSolanaBalances.length} tokens)`);
+            console.log('Native Token Values:');
+            console.log(`  ETH: ${(nativeBalances.ethereum || 0).toFixed(6)} * $${ethPrice.toFixed(2)} = $${nativeValues.ethereum.toFixed(2)}`);
+            console.log(`  APE: ${(nativeBalances.apechain || 0).toFixed(6)} * $${apePrice.toFixed(2)} = $${nativeValues.apechain.toFixed(2)}`);
+            console.log(`  BNB: ${(nativeBalances.bnb || 0).toFixed(6)} * $${bnbPrice.toFixed(2)} = $${nativeValues.bnb.toFixed(2)}`);
+            console.log(`  SOL: ${(nativeBalances.solana || 0).toFixed(6)} * $${solPrice.toFixed(2)} = $${nativeValues.solana.toFixed(2)}`);
+            console.log('---');
+            console.log(`SUBTOTAL (Tokens): $${(tokenBreakdown.ethereum + tokenBreakdown.apechain + tokenBreakdown.bnb + tokenBreakdown.solana).toFixed(2)}`);
+            console.log(`SUBTOTAL (Native): $${(nativeValues.ethereum + nativeValues.apechain + nativeValues.bnb + nativeValues.solana).toFixed(2)}`);
+            console.log(`TOTAL PORTFOLIO VALUE: $${totalUSD.toFixed(2)}`);
+            console.log('Expected from UI: $4380.26 + $566.12 + $772.30 + $0.00 = $5718.68');
+            console.log('===============================');
+            
+            // Sanity check - if total is way off from UI totals, there might be a calculation error
+            const expectedTotal = 4380.26 + 566.12 + 772.30; // Based on user's observation
+            const calculatedTokensOnly = tokenBreakdown.ethereum + tokenBreakdown.apechain + tokenBreakdown.bnb + tokenBreakdown.solana;
+            
+            if (Math.abs(calculatedTokensOnly - expectedTotal) > expectedTotal * 0.1) { // More than 10% difference
+                console.warn('⚠️  CALCULATION MISMATCH DETECTED:');
+                console.warn(`   UI shows total: $${expectedTotal.toFixed(2)}`);
+                console.warn(`   Calculated tokens: $${calculatedTokensOnly.toFixed(2)}`);
+                console.warn(`   Difference: $${Math.abs(calculatedTokensOnly - expectedTotal).toFixed(2)}`);
+                console.warn('   This suggests a calculation error - check token balance parsing or price data');
+            }
+            
+            // Set token balances - the TokenBalanceDisplay components will calculate and report their totals
+            setTokenBalances({
+                ethereum: enrichedEthereumBalances,
+                apechain: enrichedApeChainBalances,
+                bnb: enrichedBnbBalances,
+                solana: enrichedSolanaBalances
+            });
+        } catch (err) {
+            setError('Failed to fetch token balances: ' + err.message);
+            console.error('Error fetching token balances:', err);
+        } finally {
+            setLoading(false);
+        }
+    };
+
+    // Enhanced TON provider safety check on component mount
+    useEffect(() => {
+        const checkTonProvider = () => {
+            try {
+                if (typeof window === 'undefined') return;
+                
+                // Check multiple times with delays to catch late-loading extensions
+                const checkIntervals = [0, 500, 1000, 2000];
+                
+                checkIntervals.forEach((delay, index) => {
+                    setTimeout(() => {
+                        try {
+                            if (window.ton && typeof window.ton === 'object') {
+                                console.log(`TON provider detected (check ${index + 1}/4)`);
+                            } else if (index === checkIntervals.length - 1) {
+                                console.log("TON provider not detected after multiple checks. This is normal if no TON wallet is installed.");
+                            }
+                        } catch (err) {
+                            console.warn(`TON provider check ${index + 1} failed:`, err.message);
+                        }
+                    }, delay);
+                });
+                
+            } catch (err) {
+                console.warn("TON provider safety check failed:", err.message);
+            }
+        };
+        
+        checkTonProvider();
+        
+        // Cleanup function
+        return () => {
+            // Any cleanup if needed
+        };
+    }, []);
+
+    // Fetch token balances when account changes
+    useEffect(() => {
+        fetchTokenBalances();
+    }, [account]);
 
     useEffect(() => {
         if (account) {
             fetchWalletData();
         }
     }, [account]);
+
+    // Simple callback functions to collect network totals
+    const handleNetworkTotal = React.useCallback((network) => (total) => {
+        setNetworkTotals(prev => {
+            // Only update if the value actually changed
+            if (prev[network] === total) {
+                return prev;
+            }
+            
+            const updated = { ...prev, [network]: total };
+            
+            // Check if all networks have reported their totals (including 0 values)
+            const networkKeys = ['ethereum', 'apechain', 'bnb', 'solana'];
+            const allNetworksReported = networkKeys.every(key => updated[key] !== undefined);
+            
+            if (allNetworksReported) {
+                const portfolioTotal = Object.values(updated).reduce((sum, val) => sum + (val || 0), 0);
+                
+                // Only update if the total actually changed
+                setTotalTokenValueUSD(currentTotal => {
+                    if (Math.abs(currentTotal - portfolioTotal) > 0.01) { // Only update if difference > 1 cent
+                        console.log(`📊 Portfolio Total Updated: $${portfolioTotal.toFixed(2)}`);
+                        return portfolioTotal;
+                    }
+                    return currentTotal;
+                });
+            }
+            
+            return updated;
+        });
+    }, []);
+
+    // Calculate total directly from token balances and native balances (no complex state management)
+    const calculateTotalPortfolioValue = () => {
+        let total = 0;
+        
+        // Calculate Ethereum network total
+        const ethTokenTotal = tokenBalances.ethereum.reduce((sum, token) => {
+            let rawBalance = token.tokenBalance;
+            if (typeof rawBalance === 'string' && rawBalance.startsWith('0x')) {
+                rawBalance = parseInt(rawBalance, 16);
+            } else if (typeof rawBalance === 'string') {
+                rawBalance = parseFloat(rawBalance) || 0;
+            }
+            
+            const decimals = token.decimals || 18;
+            const balance = rawBalance / Math.pow(10, decimals);
+            let price = tokenPrices[token.contractAddress.toLowerCase()] || token.alchemyPrice || 0;
+            if (token.name && token.name.toLowerCase().includes('apes in space')) {
+                price = 0;
+            }
+            return sum + (balance * price);
+        }, 0);
+        
+        const ethNativeValue = (nativeBalances.ethereum || 0) * (tokenPrices['ethereum-native'] || 0);
+        total += ethTokenTotal + ethNativeValue;
+        
+        // Calculate ApeChain network total
+        const apeTokenTotal = tokenBalances.apechain.reduce((sum, token) => {
+            let rawBalance = token.tokenBalance;
+            if (typeof rawBalance === 'string' && rawBalance.startsWith('0x')) {
+                rawBalance = parseInt(rawBalance, 16);
+            } else if (typeof rawBalance === 'string') {
+                rawBalance = parseFloat(rawBalance) || 0;
+            }
+            
+            const decimals = token.decimals || 18;
+            const balance = rawBalance / Math.pow(10, decimals);
+            let price = tokenPrices[token.contractAddress.toLowerCase()] || token.alchemyPrice || 0;
+            if (token.name && token.name.toLowerCase().includes('apes in space')) {
+                price = 0;
+            }
+            return sum + (balance * price);
+        }, 0);
+        
+        const apeNativeValue = (nativeBalances.apechain || 0) * (tokenPrices['apechain-native'] || 0);
+        total += apeTokenTotal + apeNativeValue;
+        
+        // Calculate BNB Chain network total
+        const bnbTokenTotal = tokenBalances.bnb.reduce((sum, token) => {
+            let rawBalance = token.tokenBalance;
+            if (typeof rawBalance === 'string' && rawBalance.startsWith('0x')) {
+                rawBalance = parseInt(rawBalance, 16);
+            } else if (typeof rawBalance === 'string') {
+                rawBalance = parseFloat(rawBalance) || 0;
+            }
+            
+            const decimals = token.decimals || 18;
+            const balance = rawBalance / Math.pow(10, decimals);
+            let price = tokenPrices[token.contractAddress.toLowerCase()] || token.alchemyPrice || 0;
+            if (token.name && token.name.toLowerCase().includes('apes in space')) {
+                price = 0;
+            }
+            return sum + (balance * price);
+        }, 0);
+        
+        const bnbNativeValue = (nativeBalances.bnb || 0) * (tokenPrices['bnb-native'] || 0);
+        total += bnbTokenTotal + bnbNativeValue;
+        
+        // Calculate Solana network total
+        const solTokenTotal = tokenBalances.solana.reduce((sum, token) => {
+            let rawBalance = token.tokenBalance;
+            if (typeof rawBalance === 'string' && rawBalance.startsWith('0x')) {
+                rawBalance = parseInt(rawBalance, 16);
+            } else if (typeof rawBalance === 'string') {
+                rawBalance = parseFloat(rawBalance) || 0;
+            }
+            
+            const decimals = token.decimals || 9; // Solana typically uses 9 decimals
+            const balance = rawBalance / Math.pow(10, decimals);
+            let price = tokenPrices[token.contractAddress.toLowerCase()] || token.alchemyPrice || 0;
+            return sum + (balance * price);
+        }, 0);
+        
+        const solNativeValue = (nativeBalances.solana || 0) * (tokenPrices['solana-native'] || 0);
+        total += solTokenTotal + solNativeValue;
+        
+        return total;
+    };
 
     // Add sorting function
     const handleSort = (key) => {
@@ -193,6 +973,7 @@ function WalletAnalyzer({ account }) {
             console.log('Account:', account);
             console.log('Include Staking:', includeStaking);
             console.log('API Key (first 8 chars):', API_KEY.substring(0, 8) + '...');
+            console.log('Alchemy API Key:', process.env.NEXT_PUBLIC_ALCHEMY_API_KEY);
             
             // Sequential API calls with proper delays to respect rate limits (2/sec = 500ms minimum)
             console.log('Step 1/5: Fetching normal transactions...');
@@ -1016,6 +1797,10 @@ function WalletAnalyzer({ account }) {
         let nftTrades = 0;
         let totalStakingRewards = 0;
 
+        // Initialize reward totals
+        let totalApeChurchRewards = 0;
+        let totalRaffleRewards = 0;
+
         // First pass: record NFT purchases (including paid mints, but NOT transfers)
         transactions.forEach((tx, index) => {
             if ((tx.label === 'NFT Purchase' && tx.tokenId && !tx.isTransfer) || 
@@ -1138,6 +1923,30 @@ function WalletAnalyzer({ account }) {
                     console.log(`Added staking reward to profit: ${stakingAmount} APE`);
                 }
             }
+            
+            // **NEW**: Handle APE Church Rewards as profit
+            if (tx.label === 'APE Church Reward') {
+                const churchAmount = parseFloat(tx.incomingAmount) || 0;
+                if (churchAmount > 0) {
+                    totalApeChurchRewards += churchAmount;
+                    totalProfit += churchAmount;
+                    tx.profit = churchAmount;
+                    tx.comment += ` (Church reward: ${churchAmount.toFixed(4)} APE profit)`;
+                    console.log(`Added APE Church reward to profit: ${churchAmount} APE`);
+                }
+            }
+            
+            // **NEW**: Handle Raffle Rewards as profit
+            if (tx.label === 'Raffle Reward') {
+                const raffleAmount = parseFloat(tx.incomingAmount) || 0;
+                if (raffleAmount > 0) {
+                    totalRaffleRewards += raffleAmount;
+                    totalProfit += raffleAmount;
+                    tx.profit = raffleAmount;
+                    tx.comment += ` (Raffle reward: ${raffleAmount.toFixed(4)} APE profit)`;
+                    console.log(`Added Raffle reward to profit: ${raffleAmount} APE`);
+                }
+            }
         });
 
         return {
@@ -1146,7 +1955,9 @@ function WalletAnalyzer({ account }) {
             netProfit: totalProfit - totalLoss,
             nftTrades,
             totalTransactions: transactions.length,
-            totalStakingRewards
+            totalStakingRewards,
+            totalApeChurchRewards,
+            totalRaffleRewards
         };
     };
 
@@ -1672,6 +2483,8 @@ function WalletAnalyzer({ account }) {
 
     const fetchStakingRewards = async () => {
         const STAKING_CONTRACT = '0x4Ba2396086d52cA68a37D9C0FA364286e9c7835a';
+        const APECHURCH_CONTRACT = '0xD2A5c5F58BDBeD24EF919d9dfb312ca84E7B31dD';
+        const ALLORAFFLE_CONTRACT = '0xCC558007E5BBb341fb236f52d3Ba5A0D55718F65';
         const stakingRewards = [];
         
         try {
@@ -1682,38 +2495,90 @@ function WalletAnalyzer({ account }) {
             const response = await axios.get(internalStakingUrl, { timeout: 30000 });
             
             if (response.data.status === '1' && Array.isArray(response.data.result)) {
-                console.log(`📊 Found ${response.data.result.length} internal transactions, checking for staking rewards...`);
+                console.log(`📊 Found ${response.data.result.length} internal transactions, checking for rewards from all contracts...`);
+                
+                const apeChurchRewardsData = [];
+                const raffleRewardsData = [];
                 
                 response.data.result.forEach(tx => {
-                    // Check if this is a staking reward: FROM staking contract TO our wallet
-                    if (tx.from.toLowerCase() === STAKING_CONTRACT.toLowerCase() && 
-                        tx.to.toLowerCase() === account.toLowerCase()) {
-                        
+                    // Check if this is from any of our tracked contracts TO our wallet
+                    if (tx.to.toLowerCase() === account.toLowerCase()) {
                         const rewardAmount = parseInt(tx.value) / 1e18;
                         
                         // Only include meaningful rewards (filter out dust/zero amounts)
                         if (rewardAmount > 0.001) {
                             const date = new Date(parseInt(tx.timeStamp) * 1000);
                             
-                            stakingRewards.push({
-                                hash: tx.hash,
-                                date: date,
-                                label: 'APE Staking Reward',
-                                outgoingAsset: '',
-                                outgoingAmount: '',
-                                incomingAsset: 'APE',
-                                incomingAmount: rewardAmount.toFixed(6),
-                                feeAsset: '',
-                                feeAmount: '',
-                                comment: `Staking reward received from APE staking contract (${rewardAmount.toFixed(4)} APE)`,
-                                type: 'staking_reward',
-                                isStakingReward: true
-                            });
+                            // APE Staking Contract
+                            if (tx.from.toLowerCase() === STAKING_CONTRACT.toLowerCase()) {
+                                stakingRewards.push({
+                                    hash: tx.hash,
+                                    date: date,
+                                    label: 'APE Staking Reward',
+                                    outgoingAsset: '',
+                                    outgoingAmount: '',
+                                    incomingAsset: 'APE',
+                                    incomingAmount: rewardAmount.toFixed(6),
+                                    feeAsset: '',
+                                    feeAmount: '',
+                                    comment: `Staking reward received from APE staking contract (${rewardAmount.toFixed(4)} APE)`,
+                                    type: 'staking_reward',
+                                    isStakingReward: true,
+                                    contractType: 'staking'
+                                });
+                                console.log(`✅ Found staking reward: ${rewardAmount.toFixed(4)} APE on ${date.toDateString()}`);
+                            }
                             
-                            console.log(`✅ Found staking reward: ${rewardAmount.toFixed(4)} APE on ${date.toDateString()}`);
+                            // APE Church Contract  
+                            else if (tx.from.toLowerCase() === APECHURCH_CONTRACT.toLowerCase()) {
+                                const churchReward = {
+                                    hash: tx.hash,
+                                    date: date,
+                                    label: 'APE Church Reward',
+                                    outgoingAsset: '',
+                                    outgoingAmount: '',
+                                    incomingAsset: 'APE',
+                                    incomingAmount: rewardAmount.toFixed(6),
+                                    feeAsset: '',
+                                    feeAmount: '',
+                                    comment: `Reward received from APE Church contract (${rewardAmount.toFixed(4)} APE)`,
+                                    type: 'church_reward',
+                                    isStakingReward: true,
+                                    contractType: 'church'
+                                };
+                                stakingRewards.push(churchReward);
+                                apeChurchRewardsData.push(churchReward);
+                                console.log(`✅ Found APE Church reward: ${rewardAmount.toFixed(4)} APE on ${date.toDateString()}`);
+                            }
+                            
+                            // Alloraffle Contract
+                            else if (tx.from.toLowerCase() === ALLORAFFLE_CONTRACT.toLowerCase()) {
+                                const raffleReward = {
+                                    hash: tx.hash,
+                                    date: date,
+                                    label: 'Raffle Reward',
+                                    outgoingAsset: '',
+                                    outgoingAmount: '',
+                                    incomingAsset: 'APE',
+                                    incomingAmount: rewardAmount.toFixed(6),
+                                    feeAsset: '',
+                                    feeAmount: '',
+                                    comment: `Reward received from Alloraffle contract (${rewardAmount.toFixed(4)} APE)`,
+                                    type: 'raffle_reward',
+                                    isStakingReward: true,
+                                    contractType: 'raffle'
+                                };
+                                stakingRewards.push(raffleReward);
+                                raffleRewardsData.push(raffleReward);
+                                console.log(`✅ Found Raffle reward: ${rewardAmount.toFixed(4)} APE on ${date.toDateString()}`);
+                            }
                         }
                     }
                 });
+                
+                // Update separate state arrays
+                setApeChurchRewards(apeChurchRewardsData);
+                setRaffleRewards(raffleRewardsData);
                 
                 console.log(`🎯 Total staking rewards found: ${stakingRewards.length}`);
             } else {
@@ -1758,8 +2623,316 @@ function WalletAnalyzer({ account }) {
         );
     }
 
+    // Token Balances Display Component with USD values
+    const TokenBalanceDisplay = ({ networkBalances, networkName, onTotalCalculated }) => {
+        const isApeChain = networkName.toLowerCase().includes('apechain');
+        const isEthereum = networkName.toLowerCase().includes('ethereum');
+        const isBnb = networkName.toLowerCase().includes('bnb');
+        const isSolana = networkName.toLowerCase().includes('solana');
+        
+        const calculateNetworkTotalUSD = () => {
+            let total = networkBalances.reduce((sum, token) => {
+                // Handle different possible formats of tokenBalance
+                let rawBalance = token.tokenBalance;
+                if (typeof rawBalance === 'string' && rawBalance.startsWith('0x')) {
+                    rawBalance = parseInt(rawBalance, 16);
+                } else if (typeof rawBalance === 'string') {
+                    rawBalance = parseFloat(rawBalance) || 0;
+                }
+                
+                const decimals = token.decimals || (isSolana ? 9 : 18);
+                const balance = rawBalance / Math.pow(10, decimals);
+                
+                // Override price for APES IN SPACE token to avoid wrong SPACE token confusion
+                let price = tokenPrices[token.contractAddress.toLowerCase()] || token.alchemyPrice || 0;
+                if (token.name && token.name.toLowerCase().includes('apes in space')) {
+                    price = 0; // Set to zero to avoid wrong token price
+                }
+                
+                return sum + (balance * price);
+            }, 0);
+            
+            // Add native balance value
+            if (isEthereum && nativeBalances.ethereum > 0) {
+                const ethPrice = tokenPrices['ethereum-native'] || 0;
+                total += nativeBalances.ethereum * ethPrice;
+            } else if (isApeChain && nativeBalances.apechain > 0) {
+                const apePrice = tokenPrices['apechain-native'] || 0;
+                total += nativeBalances.apechain * apePrice;
+            } else if (isBnb && nativeBalances.bnb > 0) {
+                const bnbPrice = tokenPrices['bnb-native'] || 0;
+                total += nativeBalances.bnb * bnbPrice;
+            } else if (isSolana && nativeBalances.solana > 0) {
+                const solPrice = tokenPrices['solana-native'] || 0;
+                total += nativeBalances.solana * solPrice;
+            }
+            
+            return total;
+        };
+
+        const networkTotalUSD = React.useMemo(() => {
+            return calculateNetworkTotalUSD();
+        }, [networkBalances, tokenPrices, nativeBalances, isEthereum, isApeChain, isBnb, isSolana]);
+
+        // Report the total to parent component once when values change
+        React.useEffect(() => {
+            if (onTotalCalculated && networkTotalUSD !== undefined) {
+                onTotalCalculated(networkTotalUSD);
+            }
+        }, [networkTotalUSD, onTotalCalculated]);
+
+        return (
+            <div className="token-balances">
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '15px' }}>
+                    <h3>{networkName} Token Balances</h3>
+                    <div style={{ 
+                        backgroundColor: '#374151', 
+                        padding: '8px 16px', 
+                        borderRadius: '8px',
+                        color: '#10b981',
+                        fontWeight: '600',
+                        fontSize: '14px'
+                    }}>
+                        Total: ${networkTotalUSD.toFixed(2)} USD
+                    </div>
+                </div>
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Logo</th>
+                            <th>Token Name</th>
+                            <th>Symbol</th>
+                            <th>Balance</th>
+                            <th>Price USD</th>
+                            <th>Balance USD</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {/* Combined and sorted tokens (native + ERC-20) */}
+                        {(() => {
+                            // Create an array that combines native token and ERC-20 tokens
+                            const allTokens = [];
+                            
+                            // Add native token if it exists
+                            if ((isEthereum && nativeBalances.ethereum > 0) || 
+                                (isApeChain && nativeBalances.apechain > 0) ||
+                                (isBnb && nativeBalances.bnb > 0) ||
+                                (isSolana && nativeBalances.solana > 0)) {
+                                
+                                let nativeBalance, nativeSymbol, nativeName, nativePrice;
+                                
+                                if (isEthereum && nativeBalances.ethereum > 0) {
+                                    nativeBalance = nativeBalances.ethereum;
+                                    nativeSymbol = 'ETH';
+                                    nativeName = 'Ethereum';
+                                    nativePrice = tokenPrices['ethereum-native'] || 0;
+                                } else if (isApeChain && nativeBalances.apechain > 0) {
+                                    nativeBalance = nativeBalances.apechain;
+                                    nativeSymbol = 'APE';
+                                    nativeName = 'ApeCoin';
+                                    nativePrice = tokenPrices['apechain-native'] || 0;
+                                } else if (isBnb && nativeBalances.bnb > 0) {
+                                    nativeBalance = nativeBalances.bnb;
+                                    nativeSymbol = 'BNB';
+                                    nativeName = 'BNB';
+                                    nativePrice = tokenPrices['bnb-native'] || 0;
+                                } else if (isSolana && nativeBalances.solana > 0) {
+                                    nativeBalance = nativeBalances.solana;
+                                    nativeSymbol = 'SOL';
+                                    nativeName = 'Solana';
+                                    nativePrice = tokenPrices['solana-native'] || 0;
+                                }
+                                
+                                const nativeBalanceUSD = nativeBalance * nativePrice;
+                                
+                                allTokens.push({
+                                    isNative: true,
+                                    name: nativeName,
+                                    symbol: nativeSymbol,
+                                    calculatedBalance: nativeBalance,
+                                    calculatedPrice: nativePrice,
+                                    calculatedBalanceUSD: nativeBalanceUSD,
+                                    logo: null
+                                });
+                            }
+                            
+                            // Add ERC-20 tokens
+                            networkBalances.forEach((token) => {
+                                let rawBalance = token.tokenBalance;
+                                if (typeof rawBalance === 'string' && rawBalance.startsWith('0x')) {
+                                    rawBalance = parseInt(rawBalance, 16);
+                                } else if (typeof rawBalance === 'string') {
+                                    rawBalance = parseFloat(rawBalance) || 0;
+                                }
+                                
+                                const decimals = token.decimals || (isSolana ? 9 : 18);
+                                const balance = rawBalance / Math.pow(10, decimals);
+                                
+                                let price = tokenPrices[token.contractAddress.toLowerCase()] || token.alchemyPrice || 0;
+                                if (token.name && token.name.toLowerCase().includes('apes in space')) {
+                                    price = 0;
+                                }
+                                
+                                const balanceUSD = balance * price;
+                                
+                                allTokens.push({
+                                    ...token,
+                                    isNative: false,
+                                    calculatedBalance: balance,
+                                    calculatedPrice: price,
+                                    calculatedBalanceUSD: balanceUSD
+                                });
+                            });
+                            
+                            // Sort all tokens by USD value (descending)
+                            return allTokens
+                                .sort((a, b) => b.calculatedBalanceUSD - a.calculatedBalanceUSD)
+                                .map((token, index) => {
+                                    const balance = token.calculatedBalance;
+                                    const price = token.calculatedPrice;
+                                    const balanceUSD = token.calculatedBalanceUSD;
+                                    
+                                    return (
+                                        <tr key={token.isNative ? 'native-balance' : index} 
+                                            style={token.isNative ? { backgroundColor: 'rgba(16, 185, 129, 0.1)' } : {}}>
+                                            <td>
+                                                {token.isNative ? (
+                                                    <div style={{ 
+                                                        width: '20px', 
+                                                        height: '20px', 
+                                                        borderRadius: '50%', 
+                                                        backgroundColor: isEthereum ? '#627eea' : isApeChain ? '#0052ff' : isBnb ? '#f3ba2f' : '#9945ff',
+                                                        display: 'flex',
+                                                        alignItems: 'center',
+                                                        justifyContent: 'center',
+                                                        fontSize: '10px',
+                                                        color: '#fff',
+                                                        fontWeight: 'bold'
+                                                    }}>
+                                                        {token.symbol.charAt(0)}
+                                                    </div>
+                                                ) : token.logo ? (
+                                                    <img src={token.logo} alt={token.name} width="20" style={{ borderRadius: '50%' }} />
+                                                ) : (
+                                                    <div style={{ 
+                                                        width: '20px', 
+                                                        height: '20px', 
+                                                        borderRadius: '50%', 
+                                                        backgroundColor: '#6b7280',
+                                                        display: 'flex',
+                                                        alignItems: 'center',
+                                                        justifyContent: 'center',
+                                                        fontSize: '10px',
+                                                        color: '#fff'
+                                                    }}>
+                                                        {token.symbol?.charAt(0) || '?'}
+                                                    </div>
+                                                )}
+                                            </td>
+                                            <td style={token.isNative ? { fontWeight: '600' } : {}}>
+                                                {token.name || 'Unknown Token'}
+                                            </td>
+                                            <td style={token.isNative ? { fontWeight: '600' } : {}}>
+                                                {token.symbol || 'N/A'}
+                                            </td>
+                                            <td style={token.isNative ? { fontWeight: '600' } : {}}>
+                                                {balance.toFixed(token.isNative ? 6 : 4)}
+                                            </td>
+                                            <td style={{ 
+                                                color: price > 0 ? '#10b981' : '#6b7280',
+                                                fontWeight: token.isNative ? '600' : 'normal'
+                                            }}>
+                                                {price > 0 ? `$${price.toFixed(6)}` : 'N/A'}
+                                            </td>
+                                            <td style={{ 
+                                                color: balanceUSD > 0 ? '#10b981' : '#6b7280',
+                                                fontWeight: (balanceUSD > 1 || token.isNative) ? '600' : 'normal',
+                                                fontSize: token.isNative ? '14px' : 'inherit'
+                                            }}>
+                                                {balanceUSD > 0 ? `$${balanceUSD.toFixed(2)}` : '$0.00'}
+                                            </td>
+                                        </tr>
+                                    );
+                                });
+                        })()}
+                        
+                        {/* Remove the old separate ERC-20 token mapping */}
+                        {networkBalances.length === 0 && (
+                            <tr>
+                                <td colSpan="6" style={{ 
+                                    textAlign: 'center', 
+                                    padding: '40px', 
+                                    color: '#9ca3af',
+                                    fontStyle: 'italic'
+                                }}>
+                                    No tokens found on {networkName}
+                                </td>
+                            </tr>
+                        )}
+                    </tbody>
+                </table>
+            </div>
+        );
+    };
+
     return (
         <div>
+            {/* Display Token Balances for both networks */}
+            <div className="network-balances" style={{
+                display: 'grid',
+                gridTemplateColumns: 'repeat(auto-fit, minmax(600px, 1fr))',
+                gap: '20px',
+                marginBottom: '30px'
+            }}>
+                <div style={{
+                    backgroundColor: '#1f2937',
+                    borderRadius: '12px',
+                    padding: '20px',
+                    border: '1px solid #374151'
+                }}>
+                    <TokenBalanceDisplay 
+                        networkBalances={tokenBalances.ethereum} 
+                        networkName="Ethereum Mainnet" 
+                        onTotalCalculated={handleNetworkTotal('ethereum')}
+                    />
+                </div>
+                <div style={{
+                    backgroundColor: '#1f2937',
+                    borderRadius: '12px',
+                    padding: '20px',
+                    border: '1px solid #374151'
+                }}>
+                    <TokenBalanceDisplay 
+                        networkBalances={tokenBalances.apechain} 
+                        networkName="ApeChain" 
+                        onTotalCalculated={handleNetworkTotal('apechain')}
+                    />
+                </div>
+                <div style={{
+                    backgroundColor: '#1f2937',
+                    borderRadius: '12px',
+                    padding: '20px',
+                    border: '1px solid #374151'
+                }}>
+                    <TokenBalanceDisplay 
+                        networkBalances={tokenBalances.bnb} 
+                        networkName="BNB Chain" 
+                        onTotalCalculated={handleNetworkTotal('bnb')}
+                    />
+                </div>
+                <div style={{
+                    backgroundColor: '#1f2937',
+                    borderRadius: '12px',
+                    padding: '20px',
+                    border: '1px solid #374151'
+                }}>
+                    <TokenBalanceDisplay 
+                        networkBalances={tokenBalances.solana} 
+                        networkName="Solana" 
+                        onTotalCalculated={handleNetworkTotal('solana')}
+                    />
+                </div>
+            </div>
             {analysis && (
                 <div className="analysis-section">
                     <h2>Wallet Analysis Summary</h2>
@@ -1785,6 +2958,32 @@ function WalletAnalyzer({ account }) {
                                 {(analysis.totalStakingRewards || 0).toFixed(4)} APE
                             </div>
                             <div className="stat-label">Staking Rewards</div>
+                        </div>
+                        <div className="stat-card" style={{borderLeftColor: '#f59e0b'}}>
+                            <div className="stat-value" style={{color: '#f59e0b'}}>
+                                {(analysis.totalApeChurchRewards || 0).toFixed(4)} APE
+                            </div>
+                            <div className="stat-label">APE Church</div>
+                        </div>
+                        <div className="stat-card" style={{borderLeftColor: '#ec4899'}}>
+                            <div className="stat-value" style={{color: '#ec4899'}}>
+                                {(analysis.totalRaffleRewards || 0).toFixed(4)} APE
+                            </div>
+                            <div className="stat-label">Raffles</div>
+                        </div>
+                        <div className="stat-card" style={{borderLeftColor: '#06b6d4'}}>
+                            <div className="stat-value" style={{color: '#06b6d4'}}>
+                                ${totalTokenValueUSD.toFixed(2)}
+                            </div>
+                            <div className="stat-label">Total Token Value</div>
+                            <div style={{
+                                fontSize: '11px',
+                                color: '#9ca3af',
+                                marginTop: '4px',
+                                fontStyle: 'italic'
+                            }}>
+                                ETH + APE + BNB + SOL
+                            </div>
                         </div>
                         <div className="stat-card" style={{borderLeftColor: analysis.netProfit >= 0 ? '#10b981' : '#ef4444'}}>
                             <div className="stat-value" style={{color: analysis.netProfit >= 0 ? '#10b981' : '#ef4444'}}>
@@ -1843,19 +3042,47 @@ function WalletAnalyzer({ account }) {
                             fontWeight: '500'
                         }}
                     >
-                        Include APE Staking Rewards
+                        Include Staking & Reward Contracts
                     </label>
-                    {stakingTransactions.length > 0 && (
-                        <span style={{
-                            backgroundColor: '#10b981',
-                            color: '#ffffff',
-                            padding: '4px 12px',
-                            borderRadius: '12px',
-                            fontSize: '14px',
-                            fontWeight: '600'
-                        }}>
-                            {stakingTransactions.length} rewards found
-                        </span>
+                    {(stakingTransactions.length > 0 || apeChurchRewards.length > 0 || raffleRewards.length > 0) && (
+                        <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+                            {stakingTransactions.filter(tx => tx.contractType === 'staking').length > 0 && (
+                                <span style={{
+                                    backgroundColor: '#8b5cf6',
+                                    color: '#ffffff',
+                                    padding: '4px 12px',
+                                    borderRadius: '12px',
+                                    fontSize: '14px',
+                                    fontWeight: '600'
+                                }}>
+                                    {stakingTransactions.filter(tx => tx.contractType === 'staking').length} staking
+                                </span>
+                            )}
+                            {apeChurchRewards.length > 0 && (
+                                <span style={{
+                                    backgroundColor: '#f59e0b',
+                                    color: '#ffffff',
+                                    padding: '4px 12px',
+                                    borderRadius: '12px',
+                                    fontSize: '14px',
+                                    fontWeight: '600'
+                                }}>
+                                    {apeChurchRewards.length} church
+                                </span>
+                            )}
+                            {raffleRewards.length > 0 && (
+                                <span style={{
+                                    backgroundColor: '#ec4899',
+                                    color: '#ffffff',
+                                    padding: '4px 12px',
+                                    borderRadius: '12px',
+                                    fontSize: '14px',
+                                    fontWeight: '600'
+                                }}>
+                                    {raffleRewards.length} raffle
+                                </span>
+                            )}
+                        </div>
                     )}
                 </div>
                 
@@ -1868,18 +3095,18 @@ function WalletAnalyzer({ account }) {
                         marginBottom: '20px'
                     }}>
                         <div style={{color: '#9ca3af', fontSize: '14px', lineHeight: '1.6'}}>
-                            <strong>ℹ️ About Staking Detection:</strong>
+                            <strong>ℹ️ About Reward Contract Detection:</strong>
                             <br />
-                            • Automatically detects APE staking rewards from internal transactions
+                            • Automatically detects rewards from APE staking, APE Church, and Alloraffle contracts
                             <br />
-                            • Shows rewards received from the official staking contract
+                            • Shows rewards received from official reward contracts
                             <br />
                             • Only includes rewards above 0.001 APE (filters out dust)
                             <br />
-                            • Re-analyze after checking this box to fetch staking data
+                            • Re-analyze after checking this box to fetch reward data
                         </div>
                         
-                        {!loading && includeStaking && stakingTransactions.length === 0 && (
+                        {!loading && includeStaking && stakingTransactions.length === 0 && apeChurchRewards.length === 0 && raffleRewards.length === 0 && (
                             <div style={{
                                 color: '#fbbf24',
                                 marginTop: '12px',
@@ -1887,7 +3114,7 @@ function WalletAnalyzer({ account }) {
                                 backgroundColor: 'rgba(251, 191, 36, 0.1)',
                                 borderRadius: '4px'
                             }}>
-                                No staking rewards detected. Click "Re-analyze" to fetch staking data.
+                                No rewards detected from any contract. Click "Re-analyze" to fetch reward data.
                             </div>
                         )}
                     </div>
@@ -1906,7 +3133,7 @@ function WalletAnalyzer({ account }) {
                                 cursor: loading ? 'not-allowed' : 'pointer'
                             }}
                         >
-                            {loading ? 'Analyzing...' : 'Re-analyze with Staking Data'}
+                            {loading ? 'Analyzing...' : 'Re-analyze with Reward Data'}
                         </button>
                     </div>
                 )}

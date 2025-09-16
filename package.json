@@ -9,8 +9,10 @@
     "start": "webpack serve --mode development --open"
   },
   "dependencies": {
+    "alchemy-sdk": "^3.6.3",
     "axios": "^1.5.0",
     "date-fns": "^2.30.0",
+    "dotenv": "^17.2.2",
     "ethers": "^6.8.0",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
