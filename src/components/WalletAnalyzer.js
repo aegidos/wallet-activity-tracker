@@ -4,6 +4,9 @@ import { format } from 'date-fns';
 import { ScatterChart, Scatter, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell } from 'recharts';
 import { Alchemy, Network } from 'alchemy-sdk';
 
+// APE Staking Contract Address
+const STAKING_CONTRACT = '0x4Ba2396086d52cA68a37D9C0FA364286e9c7835a';
+
 // Global TON provider protection - runs immediately when module loads
 if (typeof window !== 'undefined') {
     // Create a safe proxy for window.ton to prevent undefined access errors
@@ -32,14 +35,41 @@ if (typeof window !== 'undefined') {
         enumerable: true
     });
     
-    // Additional safety: catch any unhandled TON-related errors
+    // Enhanced safety: catch any unhandled TON-related errors
     window.addEventListener('error', (event) => {
-        if (event.error && event.error.message && event.error.message.includes('ton')) {
-            console.warn('Caught TON-related error:', event.error.message);
+        const errorMessage = event.error?.message || event.message || '';
+        if (errorMessage.toLowerCase().includes('ton') || 
+            errorMessage.includes('Cannot read properties of undefined (reading \'ton\')')) {
+            console.warn('Suppressed TON-related error:', errorMessage);
             event.preventDefault(); // Prevent the error from bubbling up
+            event.stopPropagation();
             return false;
         }
     });
+    
+    // Also catch unhandled promise rejections related to TON
+    window.addEventListener('unhandledrejection', (event) => {
+        const errorMessage = event.reason?.message || event.reason || '';
+        if (typeof errorMessage === 'string' && errorMessage.toLowerCase().includes('ton')) {
+            console.warn('Suppressed TON-related promise rejection:', errorMessage);
+            event.preventDefault();
+            return false;
+        }
+    });
+    
+    // Override console.error to suppress TON errors in development
+    const originalConsoleError = console.error;
+    console.error = (...args) => {
+        const message = args[0];
+        if (typeof message === 'string' && (
+            message.toLowerCase().includes('ton') ||
+            message.includes('Cannot read properties of undefined (reading \'ton\')')
+        )) {
+            // Silently suppress TON-related console errors
+            return;
+        }
+        originalConsoleError.apply(console, args);
+    };
 }
 
 const ALCHEMY_API_KEY = process.env.NEXT_PUBLIC_ALCHEMY_API_KEY || 'Lx58kkNIJtKmG_mSohRWLvxzxJj_iNW-';
@@ -129,6 +159,7 @@ function WalletAnalyzer({ account }) {
     });
     const [tokenPrices, setTokenPrices] = useState({});
     const [totalTokenValueUSD, setTotalTokenValueUSD] = useState(0);
+    const [stakedAPEAmount, setStakedAPEAmount] = useState(0);
     const [networkTotals, setNetworkTotals] = useState({
         ethereum: 0,
         apechain: 0,
@@ -706,12 +737,17 @@ function WalletAnalyzer({ account }) {
             const allNetworksReported = networkKeys.every(key => updated[key] !== undefined);
             
             if (allNetworksReported) {
-                const portfolioTotal = Object.values(updated).reduce((sum, val) => sum + (val || 0), 0);
+                const basePortfolioTotal = Object.values(updated).reduce((sum, val) => sum + (val || 0), 0);
+                
+                // Add staked APE value to portfolio total
+                const apePrice = tokenPrices['apechain-native'] || 0;
+                const stakedAPEValue = stakedAPEAmount * apePrice;
+                const portfolioTotal = basePortfolioTotal + stakedAPEValue;
                 
                 // Only update if the total actually changed
                 setTotalTokenValueUSD(currentTotal => {
                     if (Math.abs(currentTotal - portfolioTotal) > 0.01) { // Only update if difference > 1 cent
-                        console.log(`📊 Portfolio Total Updated: $${portfolioTotal.toFixed(2)}`);
+                        console.log(`📊 Portfolio Total Updated: $${portfolioTotal.toFixed(2)} (includes $${stakedAPEValue.toFixed(2)} staked APE)`);
                         return portfolioTotal;
                     }
                     return currentTotal;
@@ -721,6 +757,26 @@ function WalletAnalyzer({ account }) {
             return updated;
         });
     }, []);
+
+    // Recalculate portfolio total when staked APE amount changes
+    useEffect(() => {
+        if (stakedAPEAmount > 0) {
+            const apePrice = tokenPrices['apechain-native'] || 0;
+            const stakedAPEValue = stakedAPEAmount * apePrice;
+            
+            // Get current network totals
+            const baseTotal = Object.values(networkTotals).reduce((sum, val) => sum + (val || 0), 0);
+            const newPortfolioTotal = baseTotal + stakedAPEValue;
+            
+            setTotalTokenValueUSD(currentTotal => {
+                if (Math.abs(currentTotal - newPortfolioTotal) > 0.01) {
+                    console.log(`💎 Portfolio Total Updated with Staked APE: $${newPortfolioTotal.toFixed(2)} (base: $${baseTotal.toFixed(2)} + staked: $${stakedAPEValue.toFixed(2)})`);
+                    return newPortfolioTotal;
+                }
+                return currentTotal;
+            });
+        }
+    }, [stakedAPEAmount, tokenPrices, networkTotals]);
 
     // Calculate total directly from token balances and native balances (no complex state management)
     const calculateTotalPortfolioValue = () => {
@@ -1114,11 +1170,49 @@ function WalletAnalyzer({ account }) {
                 if (!tx || !tx.hash) return; // Skip invalid transactions
                 const date = new Date(parseInt(tx.timeStamp) * 1000);
                 
-                // Label as Payment or Deposit (exact same logic as Python)
+                // Label as Payment, APE Staked, or Deposit (enhanced logic)
                 let label, outgoingAsset, outgoingAmount, incomingAsset, incomingAmount;
                 
                 if (tx.from.toLowerCase() === account.toLowerCase()) {
-                    label = 'Payment';
+                    // Check if payment is to APE staking contract AND transaction was successful
+                    if (tx.to && tx.to.toLowerCase() === STAKING_CONTRACT.toLowerCase()) {
+                        const apeAmount = parseInt(tx.value) / 1e18;
+                        console.log(`🔍 Staking contract transaction found - All fields:`, {
+                            hash: tx.hash,
+                            txreceipt_status: tx.txreceipt_status,
+                            isError: tx.isError,
+                            status: tx.status,
+                            value: apeAmount.toFixed(4) + ' APE',
+                            allFields: Object.keys(tx)
+                        });
+                        
+                        // More flexible success check - if txreceipt_status is missing, assume success if no error
+                        const isSuccess = (tx.txreceipt_status === '1') || 
+                                        (tx.txreceipt_status === undefined && tx.isError !== '1');
+                        
+                        // Only label as "APE Staked" if amount > 1 APE and transaction is successful
+                        const isValidStaking = isSuccess && apeAmount > 1;
+                        
+                        console.log(`🔍 Transaction evaluation:`, {
+                            hash: tx.hash,
+                            apeAmount: apeAmount,
+                            isSuccess: isSuccess,
+                            isValidStaking: isValidStaking,
+                            reasoning: !isSuccess ? 'Transaction failed' : 
+                                      apeAmount <= 1 ? `Amount too small (${apeAmount.toFixed(4)} APE <= 1)` :
+                                      'Valid staking transaction'
+                        });
+                        
+                        if (isValidStaking) {
+                            label = 'APE Staked';
+                        } else if (!isSuccess) {
+                            label = 'Payment (Failed)';
+                        } else {
+                            label = 'Payment'; // Small amount but successful
+                        }
+                    } else {
+                        label = 'Payment';
+                    }
                     outgoingAsset = 'APE';
                     outgoingAmount = (parseInt(tx.value) / 1e18).toString();
                     incomingAsset = '';
@@ -1777,13 +1871,22 @@ function WalletAnalyzer({ account }) {
         transactions.sort((a, b) => b.date - a.date); // Changed from a.date - b.date
         
         // At the end of processWalletData, before return:
+        // Calculate total staked APE amount
+        const totalStakedAPE = transactions
+            .filter(tx => tx.label === 'APE Staked')
+            .reduce((sum, tx) => sum + parseFloat(tx.outgoingAmount || 0), 0);
+        
+        setStakedAPEAmount(totalStakedAPE);
+        console.log(`💎 Total APE Staked: ${totalStakedAPE.toFixed(4)} APE`);
+        
         console.log('=== FINAL PROCESSING RESULTS ===');
         console.log(`Total transactions processed: ${transactions.length}`);
         console.log('Breakdown:', {
             nftTransactions: transactions.filter(t => t.type === 'nft').length,
             tokenTransactions: transactions.filter(t => t.type === 'token').length,
             regularTransactions: transactions.filter(t => t.type === 'transaction').length,
-            conversionTransactions: transactions.filter(t => t.type === 'conversion').length
+            conversionTransactions: transactions.filter(t => t.type === 'conversion').length,
+            apeStakingTransactions: transactions.filter(t => t.label === 'APE Staked').length
         });
         
         return transactions;
@@ -2482,7 +2585,6 @@ function WalletAnalyzer({ account }) {
     };
 
     const fetchStakingRewards = async () => {
-        const STAKING_CONTRACT = '0x4Ba2396086d52cA68a37D9C0FA364286e9c7835a';
         const APECHURCH_CONTRACT = '0xD2A5c5F58BDBeD24EF919d9dfb312ca84E7B31dD';
         const ALLORAFFLE_CONTRACT = '0xCC558007E5BBb341fb236f52d3Ba5A0D55718F65';
         const stakingRewards = [];
@@ -2971,18 +3073,32 @@ function WalletAnalyzer({ account }) {
                             </div>
                             <div className="stat-label">Raffles</div>
                         </div>
-                        <div className="stat-card" style={{borderLeftColor: '#06b6d4'}}>
-                            <div className="stat-value" style={{color: '#06b6d4'}}>
-                                ${totalTokenValueUSD.toFixed(2)}
+                        <div className="stat-card" style={{borderLeftColor: '#ff6b35'}}>
+                            <div className="stat-value" style={{color: '#ff6b35'}}>
+                                {stakedAPEAmount.toFixed(4)} APE
                             </div>
-                            <div className="stat-label">Total Token Value</div>
+                            <div className="stat-label">Staked APE</div>
                             <div style={{
                                 fontSize: '11px',
                                 color: '#9ca3af',
                                 marginTop: '4px',
                                 fontStyle: 'italic'
                             }}>
-                                ETH + APE + BNB + SOL
+                                ${((stakedAPEAmount * (tokenPrices['apechain-native'] || 0)).toFixed(2))}
+                            </div>
+                        </div>
+                        <div className="stat-card" style={{borderLeftColor: '#06b6d4'}}>
+                            <div className="stat-value" style={{color: '#06b6d4'}}>
+                                ${totalTokenValueUSD.toFixed(2)}
+                            </div>
+                            <div className="stat-label">Total Portfolio Value</div>
+                            <div style={{
+                                fontSize: '11px',
+                                color: '#9ca3af',
+                                marginTop: '4px',
+                                fontStyle: 'italic'
+                            }}>
+                                ETH + APE + BNB + SOL + Staked APE
                             </div>
                         </div>
                         <div className="stat-card" style={{borderLeftColor: analysis.netProfit >= 0 ? '#10b981' : '#ef4444'}}>
