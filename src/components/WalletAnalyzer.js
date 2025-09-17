@@ -4,7 +4,7 @@ import { format } from 'date-fns';
 import { ScatterChart, Scatter, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell } from 'recharts';
 import { Alchemy, Network } from 'alchemy-sdk';
 
-// APE Staking Contract Address
+// APE Staking Contract Addressf
 const STAKING_CONTRACT = '0x4Ba2396086d52cA68a37D9C0FA364286e9c7835a';
 
 // Global TON provider protection - runs immediately when module loads
@@ -160,6 +160,9 @@ function WalletAnalyzer({ account }) {
     const [tokenPrices, setTokenPrices] = useState({});
     const [totalTokenValueUSD, setTotalTokenValueUSD] = useState(0);
     const [stakedAPEAmount, setStakedAPEAmount] = useState(0);
+    const [nftPortfolio, setNftPortfolio] = useState([]);
+    const [nftFloorPrices, setNftFloorPrices] = useState({});
+    const [totalNftValueUSD, setTotalNftValueUSD] = useState(0);
     const [networkTotals, setNetworkTotals] = useState({
         ethereum: 0,
         apechain: 0,
@@ -178,6 +181,7 @@ function WalletAnalyzer({ account }) {
     const [stakingTransactions, setStakingTransactions] = useState([]);
     const [apeChurchRewards, setApeChurchRewards] = useState([]);
     const [raffleRewards, setRaffleRewards] = useState([]);
+    const [fetchingFloorPrices, setFetchingFloorPrices] = useState(false);
 
     // Fetch token prices using free APIs (Alchemy + Binance fallback)
     const fetchTokenPrices = async (tokens) => {
@@ -675,6 +679,400 @@ function WalletAnalyzer({ account }) {
         }
     };
 
+    // NFT Portfolio Functions
+    const fetchNftPortfolio = async () => {
+        if (!account) return;
+
+        try {
+            console.log('🖼️ Fetching NFT portfolio from multiple networks for:', account);
+            
+            // Networks to check for NFTs
+            const networks = [
+                { name: 'ethereum', displayName: 'Ethereum' },
+                { name: 'apechain', displayName: 'ApeChain' }
+            ];
+
+            let allNfts = [];
+            const collectionMap = {};
+
+            // Fetch NFTs from each network
+            for (const network of networks) {
+                try {
+                    console.log(`📡 Fetching NFTs from ${network.displayName}...`);
+                    const alchemySDK = initializeAlchemySDK(network.name);
+                    
+                    let allNetworkNfts = [];
+                    let pageKey = null;
+                    let pageCount = 0;
+                    
+                    // Paginate through all NFTs for this network
+                    do {
+                        pageCount++;
+                        console.log(`📄 Fetching page ${pageCount} from ${network.displayName}${pageKey ? ` (pageKey: ${pageKey.slice(0, 20)}...)` : ''}...`);
+                        
+                        const requestOptions = {
+                            withMetadata: true,
+                            pageSize: 100
+                        };
+                        
+                        // Add pageKey for continuation if we have one
+                        if (pageKey) {
+                            requestOptions.pageKey = pageKey;
+                        }
+                        
+                        const nftsResponse = await alchemySDK.nft.getNftsForOwner(account, requestOptions);
+                        
+                        console.log(`📊 Page ${pageCount}: Found ${nftsResponse.ownedNfts.length} NFTs on ${network.displayName}`);
+                        
+                        // Add NFTs from this page to our collection
+                        allNetworkNfts.push(...nftsResponse.ownedNfts);
+                        
+                        // Update pageKey for next iteration
+                        pageKey = nftsResponse.pageKey;
+                        
+                        // Continue if we have a pageKey (more pages available)
+                        // Also continue if we got exactly pageSize results (might be more pages)
+                    } while (pageKey);
+                    
+                    console.log(`✅ Total NFTs found on ${network.displayName}: ${allNetworkNfts.length} (across ${pageCount} pages)`);
+
+                    // Add network information to each NFT and group by collection
+                    allNetworkNfts.forEach(nft => {
+                        // Add network info to the NFT object
+                        nft.network = network.name;
+                        nft.networkDisplayName = network.displayName;
+                        allNfts.push(nft);
+
+                        const contractAddress = nft.contract.address;
+                        if (!collectionMap[contractAddress]) {
+                            collectionMap[contractAddress] = {
+                                contract: nft.contract,
+                                name: nft.contract.name,
+                                network: network.name,
+                                networkDisplayName: network.displayName,
+                                nfts: [],
+                                collectionSlug: null
+                            };
+                        }
+                        collectionMap[contractAddress].nfts.push(nft);
+                    });
+
+                } catch (networkError) {
+                    console.warn(`⚠️ Failed to fetch NFTs from ${network.displayName}:`, networkError.message);
+                    // Continue with other networks even if one fails
+                }
+            }
+
+            console.log(`🎯 Total NFTs found across all networks: ${allNfts.length}`);
+
+            // Debug: Check for specific collections you mentioned
+            const alloPassAddress = '0x88f1A6D167531adC34aB24c6B22A9E99bbd77E3F'.toLowerCase();
+            const gsOnApeAddress = '0xb3443b6bd585ba4118cae2bedb61c7ec4a8281df'.toLowerCase();
+            
+            console.log('🔍 Debugging specific collections:');
+            console.log('AlloPass (0x88f1A6D167531adC34aB24c6B22A9E99bbd77E3F):');
+            const alloPassNfts = allNfts.filter(nft => nft.contract.address.toLowerCase() === alloPassAddress);
+            console.log(`  - Found ${alloPassNfts.length} AlloPass NFTs`);
+            if (alloPassNfts.length > 0) {
+                console.log(`  - First NFT:`, alloPassNfts[0]);
+                console.log(`  - Collection name: "${alloPassNfts[0].contract.name}"`);
+                console.log(`  - Network: ${alloPassNfts[0].network}`);
+            }
+            
+            console.log('G\'s on Ape (0xb3443b6bd585ba4118cae2bedb61c7ec4a8281df):');
+            const gsOnApeNfts = allNfts.filter(nft => nft.contract.address.toLowerCase() === gsOnApeAddress);
+            console.log(`  - Found ${gsOnApeNfts.length} G's on Ape NFTs`);
+            if (gsOnApeNfts.length > 0) {
+                console.log(`  - First NFT:`, gsOnApeNfts[0]);
+                console.log(`  - Collection name: "${gsOnApeNfts[0].contract.name}"`);
+                console.log(`  - Network: ${gsOnApeNfts[0].network}`);
+            }
+
+            // Show all collections found
+            console.log('📋 All collections found by Alchemy:');
+            Object.entries(collectionMap).forEach(([address, collection]) => {
+                console.log(`  - ${collection.name || 'Unknown'} (${address.slice(0,8)}...): ${collection.nfts.length} NFTs on ${collection.networkDisplayName}`);
+            });
+
+            // Check if specific collections are missing and try to fetch them manually
+            await checkMissingCollections(allNfts, collectionMap);
+
+            // Fetch floor prices for each collection
+            await fetchFloorPrices(collectionMap);
+
+            // Set NFT portfolio and calculate value after both NFTs and floor prices are loaded
+            setNftPortfolio(allNfts);
+            
+        } catch (err) {
+            console.error('Error fetching NFT portfolio:', err);
+            setError('Failed to fetch NFT portfolio: ' + err.message);
+        }
+    };
+
+    // Function to manually check for specific collections that might be missing
+    const checkMissingCollections = async (allNfts, collectionMap) => {
+        const specificCollections = [
+            { address: '0x88f1A6D167531adC34aB24c6B22A9E99bbd77E3F', name: 'AlloPass', network: 'ethereum' },
+            { address: '0xb3443b6bd585ba4118cae2bedb61c7ec4a8281df', name: 'G\'s on Ape', network: 'apechain' }
+        ];
+
+        console.log('🔍 Checking for specific collections that might be missing...');
+
+        for (const collection of specificCollections) {
+            const collectionExists = collectionMap[collection.address.toLowerCase()];
+            
+            if (!collectionExists) {
+                console.log(`⚠️ ${collection.name} (${collection.address}) not found by Alchemy, trying manual fetch...`);
+                
+                try {
+                    const alchemySDK = initializeAlchemySDK(collection.network);
+                    
+                    // Try to get NFTs for this specific contract
+                    const nftsResponse = await alchemySDK.nft.getNftsForOwner(account, {
+                        contractAddresses: [collection.address],
+                        withMetadata: true
+                    });
+
+                    if (nftsResponse.ownedNfts && nftsResponse.ownedNfts.length > 0) {
+                        console.log(`✅ Found ${nftsResponse.ownedNfts.length} NFTs for ${collection.name} via manual fetch!`);
+                        
+                        // Add the missing NFTs to our collection
+                        nftsResponse.ownedNfts.forEach(nft => {
+                            nft.network = collection.network;
+                            nft.networkDisplayName = collection.network === 'ethereum' ? 'Ethereum' : 'ApeChain';
+                            allNfts.push(nft);
+                        });
+
+                        // Add to collection map
+                        collectionMap[collection.address.toLowerCase()] = {
+                            contract: {
+                                address: collection.address,
+                                name: collection.name
+                            },
+                            name: collection.name,
+                            network: collection.network,
+                            networkDisplayName: collection.network === 'ethereum' ? 'Ethereum' : 'ApeChain',
+                            nfts: nftsResponse.ownedNfts,
+                            collectionSlug: null
+                        };
+                    } else {
+                        console.log(`ℹ️ No NFTs found for ${collection.name} (this is normal if you don't own any)`);
+                    }
+                } catch (error) {
+                    console.warn(`❌ Failed to manually fetch ${collection.name}:`, error.message);
+                }
+            } else {
+                console.log(`✅ ${collection.name} already found by Alchemy (${collectionExists.nfts.length} NFTs)`);
+            }
+        }
+    };
+
+    const fetchFloorPrices = async (collectionMap) => {
+        console.log('\n=== 🏷️ Starting Floor Price Fetching (Magic Eden API) ===');
+        setFetchingFloorPrices(true);
+        const floorPrices = {};
+        const successfulFetches = [];
+        const failedFetches = [];
+        
+        // Rate limiting - Magic Eden allows 2 requests per second
+        const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+        const RATE_LIMIT_DELAY = 500; // 500ms = 2 requests per second
+        
+        let requestCount = 0;
+        
+        // Query each collection individually using the id parameter
+        for (const [contractAddress, collectionData] of Object.entries(collectionMap)) {
+            const collectionName = collectionData.name || 'Unknown Collection';
+            const network = collectionData.network || 'ethereum'; // Default to ethereum if no network specified
+            
+            // Special logging for the specific collections you're looking for
+            const isAlloPass = contractAddress.toLowerCase() === '0x88f1A6D167531adC34aB24c6B22A9E99bbd77E3F'.toLowerCase();
+            const isGsOnApe = contractAddress.toLowerCase() === '0xb3443b6bd585ba4118cae2bedb61c7ec4a8281df'.toLowerCase();
+            
+            if (isAlloPass) {
+                console.log(`🎯 FOUND ALLOPASS! Fetching floor price for ${collectionName} on ${network} (${contractAddress})`);
+            } else if (isGsOnApe) {
+                console.log(`🎯 FOUND G'S ON APE! Fetching floor price for ${collectionName} on ${network} (${contractAddress})`);
+            } else {
+                console.log(`🔍 Fetching floor price for ${collectionName} on ${network} (${contractAddress.slice(0, 8)}...)`);
+            }
+            
+            try {
+                // Rate limiting before each request
+                if (requestCount > 0) {
+                    await delay(RATE_LIMIT_DELAY);
+                }
+                requestCount++;
+                
+                // Determine the correct Magic Eden API endpoint based on network
+                let apiEndpoint;
+                if (network.toLowerCase() === 'apechain') {
+                    apiEndpoint = `https://api-mainnet.magiceden.dev/v3/rtp/apechain/collections/v7?id=${contractAddress}&includeMintStages=false&includeSecurityConfigs=false&normalizeRoyalties=false&useNonFlaggedFloorAsk=false&sortBy=allTimeVolume&limit=20`;
+                } else {
+                    // Default to ethereum for all other networks (ethereum, mainnet, etc.)
+                    apiEndpoint = `https://api-mainnet.magiceden.dev/v3/rtp/ethereum/collections/v7?id=${contractAddress}&includeMintStages=false&includeSecurityConfigs=false&normalizeRoyalties=false&useNonFlaggedFloorAsk=false&sortBy=allTimeVolume&limit=20`;
+                }
+                
+                console.log(`🌐 Using ${network} endpoint for ${collectionName}`);
+                
+                // Query Magic Eden API with specific collection id parameter
+                const response = await fetch(apiEndpoint, {
+                    headers: {
+                        'accept': '*/*',
+                        // Note: In production, you would add your API key here
+                        // 'Authorization': 'Bearer YOUR_API_KEY'
+                    }
+                });
+
+                if (!response.ok) {
+                    failedFetches.push({
+                        name: collectionName,
+                        address: contractAddress.slice(0, 8) + '...',
+                        reason: `API error: ${response.status}`
+                    });
+                    console.log(`❌ ${collectionName}: API error ${response.status}`);
+                    continue;
+                }
+
+                const data = await response.json();
+                const collections = data.collections || [];
+                
+                if (collections.length > 0) {
+                    const collection = collections[0]; // Take the first (and likely only) result
+                    
+                    if (collection.floorAsk?.price?.amount?.decimal) {
+                        const floorPrice = collection.floorAsk.price.amount.decimal;
+                        const floorPriceUSD = collection.floorAsk.price.amount.usd;
+                        const currency = collection.floorAsk.price.currency.symbol;
+                        
+                        floorPrices[contractAddress.toLowerCase()] = {
+                            floorPrice: floorPrice,
+                            currency: currency,
+                            collectionName: collection.name || collectionName,
+                            collectionSlug: collection.slug,
+                            priceUSD: floorPriceUSD
+                        };
+                        
+                        successfulFetches.push({
+                            name: collection.name || collectionName,
+                            address: contractAddress.slice(0, 8) + '...',
+                            price: `${floorPrice} ${currency}`,
+                            priceUSD: floorPriceUSD ? `$${floorPriceUSD.toLocaleString()}` : 'N/A',
+                            slug: collection.slug,
+                            network: network
+                        });
+                        
+                        // 🎉 SUCCESS - Make this VERY visible
+                        console.log(`%c✅ FLOOR PRICE FOUND! 🎉`, 'color: #10b981; font-weight: bold; font-size: 14px;');
+                        console.log(`%c   Collection: ${collection.name || collectionName}`, 'color: #3b82f6; font-weight: bold;');
+                        console.log(`%c   Network: ${network.toUpperCase()}`, 'color: #8b5cf6; font-weight: bold;');
+                        console.log(`%c   Floor Price: ${floorPrice} ${currency} ($${floorPriceUSD?.toLocaleString() || 'N/A'})`, 'color: #f59e0b; font-weight: bold;');
+                        console.log(`%c   Magic Eden Slug: "${collection.slug}"`, 'color: #8b5cf6;');
+                        console.log(`%c   Contract: ${contractAddress}`, 'color: #6b7280;');
+                        
+                    } else {
+                        failedFetches.push({
+                            name: collectionName,
+                            address: contractAddress.slice(0, 8) + '...',
+                            reason: 'No floor price data available'
+                        });
+                        console.log(`❌ ${collectionName}: Found in Magic Eden but no floor price available`);
+                    }
+                } else {
+                    failedFetches.push({
+                        name: collectionName,
+                        address: contractAddress.slice(0, 8) + '...',
+                        reason: 'Collection not found in Magic Eden'
+                    });
+                    console.log(`❌ ${collectionName}: Collection not found in Magic Eden`);
+                }
+                
+            } catch (error) {
+                failedFetches.push({
+                    name: collectionName,
+                    address: contractAddress.slice(0, 8) + '...',
+                    reason: `Request failed: ${error.message}`
+                });
+                console.log(`❌ ${collectionName}: Request failed - ${error.message}`);
+            }
+        }
+
+        // 🎊 FINAL SUMMARY
+        const successCount = Object.keys(floorPrices).length;
+        const totalCollections = Object.keys(collectionMap).length;
+        
+        console.log(`%c🏁 MAGIC EDEN FLOOR PRICE SUMMARY 🏁`, 'color: #ffffff; background: #059669; font-weight: bold; padding: 4px 8px; border-radius: 4px;');
+        console.log(`%c   ✅ Successfully found: ${successCount}/${totalCollections} collections`, 'color: #10b981; font-weight: bold;');
+        
+        if (successfulFetches.length > 0) {
+            console.log(`%c   💰 Collections with floor prices:`, 'color: #f59e0b; font-weight: bold;');
+            successfulFetches.forEach(item => {
+                const networkInfo = item.network ? `[${item.network.toUpperCase()}]` : '';
+                console.log(`%c      ${item.name}: ${item.price} (${item.priceUSD}) ${networkInfo}`, 'color: #3b82f6;');
+            });
+        }
+        
+        if (failedFetches.length > 0) {
+            console.log(`%c   ❌ No floor price found: ${failedFetches.length} collections`, 'color: #ef4444;');
+            console.log(`%c   💡 Failed collections (will show "Floor price not available"):`, 'color: #6b7280;');
+            failedFetches.forEach(item => {
+                console.log(`%c      ${item.name} (${item.address}): ${item.reason}`, 'color: #6b7280;');
+            });
+        }
+        
+        console.log(`%c   🕒 Total API requests made: ${requestCount}`, 'color: #6b7280;');
+        console.log(`%c   ⚡ Rate limit: 2 requests/second (Magic Eden requirement)`, 'color: #6b7280;');
+        console.log('%c=== End Magic Eden Summary ===\n', 'color: #6b7280;');
+
+        setNftFloorPrices(floorPrices);
+        setFetchingFloorPrices(false);
+        // Calculation will be triggered by useEffect when both nftPortfolio and nftFloorPrices are ready
+    };
+
+    const calculateNftPortfolioValue = (floorPrices) => {
+        let totalValue = 0;
+        const ethPrice = tokenPrices['ethereum-native'] || 0;
+
+        console.log(`🔍 Calculating NFT portfolio value with:`, {
+            nftCount: nftPortfolio.length,
+            floorPricesCount: Object.keys(floorPrices).length,
+            ethPrice: ethPrice
+        });
+
+        Object.entries(floorPrices).forEach(([contractAddress, priceData]) => {
+            const collectionNfts = nftPortfolio.filter(nft => 
+                nft.contract.address.toLowerCase() === contractAddress.toLowerCase()
+            );
+            
+            const floorPriceETH = priceData.floorPrice || 0;
+            const collectionCount = collectionNfts.length;
+            
+            // Use Magic Eden USD price if available, otherwise calculate from ETH price
+            let floorPriceUSD;
+            if (priceData.priceUSD && priceData.priceUSD > 0) {
+                floorPriceUSD = priceData.priceUSD;
+                console.log(`💰 Using Magic Eden USD price: ${priceData.collectionName} = $${floorPriceUSD.toFixed(2)} (direct)`);
+            } else if (floorPriceETH > 0 && ethPrice > 0) {
+                floorPriceUSD = floorPriceETH * ethPrice;
+                console.log(`💰 Calculated USD price: ${priceData.collectionName} = ${floorPriceETH} ETH × $${ethPrice.toFixed(2)} = $${floorPriceUSD.toFixed(2)}`);
+            } else {
+                floorPriceUSD = 0;
+                console.warn(`⚠️ No price data available for ${priceData.collectionName}`);
+            }
+            
+            const collectionValue = floorPriceUSD * collectionCount;
+            totalValue += collectionValue;
+            
+            if (collectionCount > 0) {
+                const currency = priceData.currency || 'ETH';
+                console.log(`💎 ${priceData.collectionName}: ${collectionCount} NFTs × ${floorPriceETH} ${currency} = $${collectionValue.toFixed(2)}`);
+            }
+        });
+
+        setTotalNftValueUSD(totalValue);
+        console.log(`🖼️ Total NFT Portfolio Value: $${totalValue.toFixed(2)} (Magic Eden pricing)`);
+    };
+
     // Enhanced TON provider safety check on component mount
     useEffect(() => {
         const checkTonProvider = () => {
@@ -711,9 +1109,10 @@ function WalletAnalyzer({ account }) {
         };
     }, []);
 
-    // Fetch token balances when account changes
+    // Fetch token balances and NFT portfolio when account changes
     useEffect(() => {
         fetchTokenBalances();
+        fetchNftPortfolio();
     }, [account]);
 
     useEffect(() => {
@@ -739,15 +1138,15 @@ function WalletAnalyzer({ account }) {
             if (allNetworksReported) {
                 const basePortfolioTotal = Object.values(updated).reduce((sum, val) => sum + (val || 0), 0);
                 
-                // Add staked APE value to portfolio total
+                // Add staked APE value and NFT value to portfolio total
                 const apePrice = tokenPrices['apechain-native'] || 0;
                 const stakedAPEValue = stakedAPEAmount * apePrice;
-                const portfolioTotal = basePortfolioTotal + stakedAPEValue;
+                const portfolioTotal = basePortfolioTotal + stakedAPEValue + totalNftValueUSD;
                 
                 // Only update if the total actually changed
                 setTotalTokenValueUSD(currentTotal => {
                     if (Math.abs(currentTotal - portfolioTotal) > 0.01) { // Only update if difference > 1 cent
-                        console.log(`📊 Portfolio Total Updated: $${portfolioTotal.toFixed(2)} (includes $${stakedAPEValue.toFixed(2)} staked APE)`);
+                        console.log(`📊 Portfolio Total Updated: $${portfolioTotal.toFixed(2)} (base: $${basePortfolioTotal.toFixed(2)} + staked: $${stakedAPEValue.toFixed(2)} + NFTs: $${totalNftValueUSD.toFixed(2)})`);
                         return portfolioTotal;
                     }
                     return currentTotal;
@@ -758,25 +1157,30 @@ function WalletAnalyzer({ account }) {
         });
     }, []);
 
-    // Recalculate portfolio total when staked APE amount changes
+    // Recalculate portfolio total when staked APE amount or NFT value changes
     useEffect(() => {
-        if (stakedAPEAmount > 0) {
-            const apePrice = tokenPrices['apechain-native'] || 0;
-            const stakedAPEValue = stakedAPEAmount * apePrice;
-            
-            // Get current network totals
-            const baseTotal = Object.values(networkTotals).reduce((sum, val) => sum + (val || 0), 0);
-            const newPortfolioTotal = baseTotal + stakedAPEValue;
-            
-            setTotalTokenValueUSD(currentTotal => {
-                if (Math.abs(currentTotal - newPortfolioTotal) > 0.01) {
-                    console.log(`💎 Portfolio Total Updated with Staked APE: $${newPortfolioTotal.toFixed(2)} (base: $${baseTotal.toFixed(2)} + staked: $${stakedAPEValue.toFixed(2)})`);
-                    return newPortfolioTotal;
-                }
-                return currentTotal;
-            });
+        const apePrice = tokenPrices['apechain-native'] || 0;
+        const stakedAPEValue = stakedAPEAmount * apePrice;
+        
+        // Get current network totals
+        const baseTotal = Object.values(networkTotals).reduce((sum, val) => sum + (val || 0), 0);
+        const newPortfolioTotal = baseTotal + stakedAPEValue + totalNftValueUSD;
+        
+        setTotalTokenValueUSD(currentTotal => {
+            if (Math.abs(currentTotal - newPortfolioTotal) > 0.01) {
+                console.log(`💎 Portfolio Total Updated: $${newPortfolioTotal.toFixed(2)} (base: $${baseTotal.toFixed(2)} + staked: $${stakedAPEValue.toFixed(2)} + NFTs: $${totalNftValueUSD.toFixed(2)})`);
+                return newPortfolioTotal;
+            }
+            return currentTotal;
+        });
+    }, [stakedAPEAmount, tokenPrices, networkTotals, totalNftValueUSD]);
+
+    // Recalculate NFT portfolio value when NFT data, floor prices, or ETH price changes
+    useEffect(() => {
+        if (nftPortfolio.length > 0 && Object.keys(nftFloorPrices).length > 0) {
+            calculateNftPortfolioValue(nftFloorPrices);
         }
-    }, [stakedAPEAmount, tokenPrices, networkTotals]);
+    }, [nftPortfolio, nftFloorPrices, tokenPrices]);
 
     // Calculate total directly from token balances and native balances (no complex state management)
     const calculateTotalPortfolioValue = () => {
@@ -2979,62 +3383,7 @@ function WalletAnalyzer({ account }) {
 
     return (
         <div>
-            {/* Display Token Balances for both networks */}
-            <div className="network-balances" style={{
-                display: 'grid',
-                gridTemplateColumns: 'repeat(auto-fit, minmax(600px, 1fr))',
-                gap: '20px',
-                marginBottom: '30px'
-            }}>
-                <div style={{
-                    backgroundColor: '#1f2937',
-                    borderRadius: '12px',
-                    padding: '20px',
-                    border: '1px solid #374151'
-                }}>
-                    <TokenBalanceDisplay 
-                        networkBalances={tokenBalances.ethereum} 
-                        networkName="Ethereum Mainnet" 
-                        onTotalCalculated={handleNetworkTotal('ethereum')}
-                    />
-                </div>
-                <div style={{
-                    backgroundColor: '#1f2937',
-                    borderRadius: '12px',
-                    padding: '20px',
-                    border: '1px solid #374151'
-                }}>
-                    <TokenBalanceDisplay 
-                        networkBalances={tokenBalances.apechain} 
-                        networkName="ApeChain" 
-                        onTotalCalculated={handleNetworkTotal('apechain')}
-                    />
-                </div>
-                <div style={{
-                    backgroundColor: '#1f2937',
-                    borderRadius: '12px',
-                    padding: '20px',
-                    border: '1px solid #374151'
-                }}>
-                    <TokenBalanceDisplay 
-                        networkBalances={tokenBalances.bnb} 
-                        networkName="BNB Chain" 
-                        onTotalCalculated={handleNetworkTotal('bnb')}
-                    />
-                </div>
-                <div style={{
-                    backgroundColor: '#1f2937',
-                    borderRadius: '12px',
-                    padding: '20px',
-                    border: '1px solid #374151'
-                }}>
-                    <TokenBalanceDisplay 
-                        networkBalances={tokenBalances.solana} 
-                        networkName="Solana" 
-                        onTotalCalculated={handleNetworkTotal('solana')}
-                    />
-                </div>
-            </div>
+            {/* Wallet Analysis Summary - moved to top */}
             {analysis && (
                 <div className="analysis-section">
                     <h2>Wallet Analysis Summary</h2>
@@ -3073,20 +3422,23 @@ function WalletAnalyzer({ account }) {
                             </div>
                             <div className="stat-label">Raffles</div>
                         </div>
-                        <div className="stat-card" style={{borderLeftColor: '#ff6b35'}}>
-                            <div className="stat-value" style={{color: '#ff6b35'}}>
-                                {stakedAPEAmount.toFixed(4)} APE
+                        {/* Only show Staked APE card when staking is enabled and analyzed */}
+                        {includeStaking && stakedAPEAmount > 0 && (
+                            <div className="stat-card" style={{borderLeftColor: '#ff6b35'}}>
+                                <div className="stat-value" style={{color: '#ff6b35'}}>
+                                    {stakedAPEAmount.toFixed(4)} APE
+                                </div>
+                                <div className="stat-label">Staked APE</div>
+                                <div style={{
+                                    fontSize: '11px',
+                                    color: '#9ca3af',
+                                    marginTop: '4px',
+                                    fontStyle: 'italic'
+                                }}>
+                                    ${((stakedAPEAmount * (tokenPrices['apechain-native'] || 0)).toFixed(2))}
+                                </div>
                             </div>
-                            <div className="stat-label">Staked APE</div>
-                            <div style={{
-                                fontSize: '11px',
-                                color: '#9ca3af',
-                                marginTop: '4px',
-                                fontStyle: 'italic'
-                            }}>
-                                ${((stakedAPEAmount * (tokenPrices['apechain-native'] || 0)).toFixed(2))}
-                            </div>
-                        </div>
+                        )}
                         <div className="stat-card" style={{borderLeftColor: '#06b6d4'}}>
                             <div className="stat-value" style={{color: '#06b6d4'}}>
                                 ${totalTokenValueUSD.toFixed(2)}
@@ -3098,9 +3450,28 @@ function WalletAnalyzer({ account }) {
                                 marginTop: '4px',
                                 fontStyle: 'italic'
                             }}>
-                                ETH + APE + BNB + SOL + Staked APE
+                                ETH + APE + BNB + SOL + Staked APE + NFTs
                             </div>
                         </div>
+                        {/* Floor Price Fetching Notification */}
+                        {fetchingFloorPrices && (
+                            <div className="stat-card" style={{borderLeftColor: '#f59e0b', backgroundColor: 'rgba(251, 191, 36, 0.1)'}}>
+                                <div className="stat-value" style={{color: '#f59e0b', fontSize: '0.875rem'}}>
+                                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                        <div style={{
+                                            width: '16px',
+                                            height: '16px',
+                                            border: '2px solid #f59e0b',
+                                            borderTopColor: 'transparent',
+                                            borderRadius: '50%',
+                                            animation: 'spin 1s linear infinite'
+                                        }}></div>
+                                        Loading...
+                                    </div>
+                                </div>
+                                <div className="stat-label">Fetching Realtime Floorprices...</div>
+                            </div>
+                        )}
                         <div className="stat-card" style={{borderLeftColor: analysis.netProfit >= 0 ? '#10b981' : '#ef4444'}}>
                             <div className="stat-value" style={{color: analysis.netProfit >= 0 ? '#10b981' : '#ef4444'}}>
                                 {analysis.netProfit >= 0 ? '+' : ''}{analysis.netProfit.toFixed(4)} APE
@@ -3120,14 +3491,7 @@ function WalletAnalyzer({ account }) {
                 </div>
             )}
 
-            {/* ADD THE CHART HERE - BEFORE the transaction table */}
-            {analysis && transactions.length > 0 && (
-                <div className="analysis-section">
-                    <NFTTradingChart transactions={transactions} />
-                </div>
-            )}
-
-            {/* Staking Options - moved above transaction table */}
+            {/* Staking Options - moved under Wallet Analysis Summary */}
             <div className="analysis-section">
                 <div style={{
                     display: 'flex', 
@@ -3158,7 +3522,10 @@ function WalletAnalyzer({ account }) {
                             fontWeight: '500'
                         }}
                     >
-                        Include Staking & Reward Contracts
+                        Include Staking & Reward Contracts{' '}
+                        <span style={{ color: '#fbbf24', fontSize: '14px', fontWeight: '400' }}>
+                            (experimental)
+                        </span>
                     </label>
                     {(stakingTransactions.length > 0 || apeChurchRewards.length > 0 || raffleRewards.length > 0) && (
                         <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
@@ -3254,6 +3621,321 @@ function WalletAnalyzer({ account }) {
                     </div>
                 )}
             </div>
+
+            {/* Display Token Balances for both networks */}
+            <div className="network-balances" style={{
+                display: 'grid',
+                gridTemplateColumns: 'repeat(auto-fit, minmax(600px, 1fr))',
+                gap: '20px',
+                marginBottom: '30px'
+            }}>
+                <div style={{
+                    backgroundColor: '#1f2937',
+                    borderRadius: '12px',
+                    padding: '20px',
+                    border: '1px solid #374151'
+                }}>
+                    <TokenBalanceDisplay 
+                        networkBalances={tokenBalances.ethereum} 
+                        networkName="Ethereum Mainnet" 
+                        onTotalCalculated={handleNetworkTotal('ethereum')}
+                    />
+                </div>
+                <div style={{
+                    backgroundColor: '#1f2937',
+                    borderRadius: '12px',
+                    padding: '20px',
+                    border: '1px solid #374151'
+                }}>
+                    <TokenBalanceDisplay 
+                        networkBalances={tokenBalances.apechain} 
+                        networkName="ApeChain" 
+                        onTotalCalculated={handleNetworkTotal('apechain')}
+                    />
+                </div>
+                <div style={{
+                    backgroundColor: '#1f2937',
+                    borderRadius: '12px',
+                    padding: '20px',
+                    border: '1px solid #374151'
+                }}>
+                    <TokenBalanceDisplay 
+                        networkBalances={tokenBalances.bnb} 
+                        networkName="BNB Chain" 
+                        onTotalCalculated={handleNetworkTotal('bnb')}
+                    />
+                </div>
+                <div style={{
+                    backgroundColor: '#1f2937',
+                    borderRadius: '12px',
+                    padding: '20px',
+                    border: '1px solid #374151'
+                }}>
+                    <TokenBalanceDisplay 
+                        networkBalances={tokenBalances.solana} 
+                        networkName="Solana" 
+                        onTotalCalculated={handleNetworkTotal('solana')}
+                    />
+                </div>
+            </div>
+            
+            {/* NFT Portfolio Section */}
+            {nftPortfolio.length > 0 && (
+                <div style={{ marginTop: '2rem', marginBottom: '2rem' }}>
+                    <h2 style={{ color: '#e5e7eb', marginBottom: '1rem', fontSize: '1.5rem', fontWeight: '600' }}>
+                        NFT Portfolio
+                    </h2>
+                    <div style={{ 
+                        display: 'flex', 
+                        gap: '2rem', 
+                        marginBottom: '1.5rem',
+                        padding: '1rem',
+                        backgroundColor: '#1f2937',
+                        borderRadius: '8px',
+                        border: '1px solid #374151'
+                    }}>
+                        <div style={{ textAlign: 'center' }}>
+                            <div style={{ fontSize: '2rem', fontWeight: 'bold', color: '#10b981' }}>
+                                {nftPortfolio.length}
+                            </div>
+                            <div style={{ color: '#9ca3af', fontSize: '0.875rem' }}>Total NFTs</div>
+                        </div>
+                        <div style={{ textAlign: 'center' }}>
+                            <div style={{ fontSize: '2rem', fontWeight: 'bold', color: '#3b82f6' }}>
+                                ${totalNftValueUSD.toFixed(2)}
+                            </div>
+                            <div style={{ color: '#9ca3af', fontSize: '0.875rem' }}>Estimated Value</div>
+                        </div>
+                    </div>
+                    
+                    <div style={{ 
+                        backgroundColor: '#1f2937',
+                        border: '1px solid #374151',
+                        borderRadius: '8px',
+                        overflow: 'hidden'
+                    }}>
+                        <div style={{ overflowX: 'auto' }}>
+                            <table style={{ 
+                                width: '100%',
+                                borderCollapse: 'collapse',
+                                minWidth: '600px'
+                            }}>
+                                <thead>
+                                    <tr style={{ backgroundColor: '#111827' }}>
+                                        <th style={{ 
+                                            padding: '1rem',
+                                            textAlign: 'left',
+                                            color: '#e5e7eb',
+                                            fontWeight: '600',
+                                            fontSize: '0.875rem',
+                                            borderBottom: '1px solid #374151'
+                                        }}>
+                                            Collection
+                                        </th>
+                                        <th style={{ 
+                                            padding: '1rem',
+                                            textAlign: 'center',
+                                            color: '#e5e7eb',
+                                            fontWeight: '600',
+                                            fontSize: '0.875rem',
+                                            borderBottom: '1px solid #374151'
+                                        }}>
+                                            Network
+                                        </th>
+                                        <th style={{ 
+                                            padding: '1rem',
+                                            textAlign: 'center',
+                                            color: '#e5e7eb',
+                                            fontWeight: '600',
+                                            fontSize: '0.875rem',
+                                            borderBottom: '1px solid #374151'
+                                        }}>
+                                            NFTs Owned
+                                        </th>
+                                        <th style={{ 
+                                            padding: '1rem',
+                                            textAlign: 'right',
+                                            color: '#e5e7eb',
+                                            fontWeight: '600',
+                                            fontSize: '0.875rem',
+                                            borderBottom: '1px solid #374151'
+                                        }}>
+                                            Floor Price
+                                        </th>
+                                        <th style={{ 
+                                            padding: '1rem',
+                                            textAlign: 'right',
+                                            color: '#e5e7eb',
+                                            fontWeight: '600',
+                                            fontSize: '0.875rem',
+                                            borderBottom: '1px solid #374151'
+                                        }}>
+                                            Est. Value
+                                        </th>
+
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {Object.entries(
+                                        nftPortfolio.reduce((acc, nft) => {
+                                            const contractAddress = nft.contract.address;
+                                            const nftKey = `${contractAddress}-${nft.tokenId}`;
+                                            
+                                            if (!acc[contractAddress]) {
+                                                const floorPriceData = nftFloorPrices[contractAddress.toLowerCase()];
+                                                
+                                                // Debug specific collections
+                                                const isGsOnApe = contractAddress.toLowerCase() === '0xb3443b6bd585ba4118cae2bedb61c7ec4a8281df';
+                                                const isAlloPass = contractAddress.toLowerCase() === '0x88f1A6D167531adC34aB24c6B22A9E99bbd77E3F'.toLowerCase();
+                                                
+                                                if (isGsOnApe || isAlloPass) {
+                                                    console.log(`🔍 TABLE DEBUG - ${nft.contract.name}:`);
+                                                    console.log(`   Contract: ${contractAddress}`);
+                                                    console.log(`   Lowercase: ${contractAddress.toLowerCase()}`);
+                                                    console.log(`   Floor price found:`, floorPriceData);
+                                                    console.log(`   Available floor prices:`, Object.keys(nftFloorPrices));
+                                                }
+                                                
+                                                acc[contractAddress] = {
+                                                    collection: nft.contract,
+                                                    nfts: [],
+                                                    floorPrice: floorPriceData,
+                                                    seenNfts: new Set(),
+                                                    duplicateCount: 0
+                                                };
+                                            }
+                                            
+                                            // Check for duplicates
+                                            if (acc[contractAddress].seenNfts.has(nftKey)) {
+                                                acc[contractAddress].duplicateCount += 1;
+                                            } else {
+                                                acc[contractAddress].seenNfts.add(nftKey);
+                                                acc[contractAddress].nfts.push(nft);
+                                            }
+                                            
+                                            return acc;
+                                        }, {})
+                                    )
+                                    // Sort by estimated value descending
+                                    .sort(([, a], [, b]) => {
+                                        const getEstValue = (collectionData) => {
+                                            if (!collectionData.floorPrice) return 0;
+                                            
+                                            const priceUSD = collectionData.floorPrice.priceUSD || 
+                                                (collectionData.floorPrice.floorPrice * (tokenPrices['ethereum-native'] || 0));
+                                            return priceUSD * collectionData.nfts.length; // Use actual unique NFT count
+                                        };
+                                        
+                                        return getEstValue(b) - getEstValue(a);
+                                    })
+                                    .map(([contractAddress, collectionData], index) => {
+                                        const isDuplicate = collectionData.duplicateCount > 0;
+                                        return (
+                                        <tr key={contractAddress} style={{
+                                            backgroundColor: index % 2 === 0 ? '#1f2937' : '#1a202c',
+                                            borderBottom: '1px solid #374151'
+                                        }}>
+                                            <td style={{ padding: '1rem', verticalAlign: 'top' }}>
+                                                <div style={{ color: '#e5e7eb', fontWeight: '500', fontSize: '0.875rem' }}>
+                                                    {collectionData.collection.name || 'Unknown Collection'}
+                                                </div>
+                                                <div style={{ 
+                                                    color: '#9ca3af', 
+                                                    fontSize: '0.75rem',
+                                                    marginTop: '0.25rem',
+                                                    fontFamily: 'monospace'
+                                                }}>
+                                                    {contractAddress.slice(0, 6)}...{contractAddress.slice(-4)}
+                                                </div>
+                                                {collectionData.duplicateCount > 0 && (
+                                                    <div style={{ 
+                                                        color: '#f59e0b', 
+                                                        fontSize: '0.7rem',
+                                                        marginTop: '0.25rem',
+                                                        fontStyle: 'italic'
+                                                    }}>
+                                                        ⚠️ {collectionData.duplicateCount} duplicate{collectionData.duplicateCount > 1 ? 's' : ''} removed
+                                                    </div>
+                                                )}
+                                            </td>
+                                            <td style={{ padding: '1rem', textAlign: 'center', verticalAlign: 'top' }}>
+                                                {collectionData.collection.network && (
+                                                    <span style={{ 
+                                                        backgroundColor: collectionData.collection.network.name === 'ethereum' ? '#627eea' : '#ff6b35',
+                                                        color: 'white',
+                                                        padding: '0.25rem 0.5rem',
+                                                        borderRadius: '0.25rem',
+                                                        fontSize: '0.75rem',
+                                                        fontWeight: '500',
+                                                        textTransform: 'uppercase'
+                                                    }}>
+                                                        {collectionData.collection.network.displayName || collectionData.collection.network.name}
+                                                    </span>
+                                                )}
+                                            </td>
+                                            <td style={{ 
+                                                padding: '1rem', 
+                                                textAlign: 'center',
+                                                verticalAlign: 'top',
+                                                color: '#3b82f6',
+                                                fontWeight: '600',
+                                                fontSize: '1rem'
+                                            }}>
+                                                {collectionData.nfts.length}
+                                                {collectionData.duplicateCount > 0 && (
+                                                    <div style={{ fontSize: '0.7rem', color: '#9ca3af', marginTop: '0.125rem' }}>
+                                                        ({collectionData.nfts.length + collectionData.duplicateCount} total, {collectionData.duplicateCount} dup{collectionData.duplicateCount > 1 ? 's' : ''})
+                                                    </div>
+                                                )}
+                                            </td>
+                                            <td style={{ padding: '1rem', textAlign: 'right', verticalAlign: 'top' }}>
+                                                {collectionData.floorPrice ? (
+                                                    <div>
+                                                        <div style={{ color: '#e5e7eb', fontSize: '0.875rem', fontWeight: '500' }}>
+                                                            {collectionData.floorPrice.floorPrice} {collectionData.floorPrice.currency || 'ETH'}
+                                                        </div>
+                                                        {collectionData.floorPrice.priceUSD && (
+                                                            <div style={{ color: '#9ca3af', fontSize: '0.75rem', marginTop: '0.125rem' }}>
+                                                                ${collectionData.floorPrice.priceUSD.toLocaleString()}
+                                                            </div>
+                                                        )}
+                                                    </div>
+                                                ) : (
+                                                    <span style={{ color: '#ef4444', fontSize: '0.75rem' }}>Not available</span>
+                                                )}
+                                            </td>
+                                            <td style={{ padding: '1rem', textAlign: 'right', verticalAlign: 'top' }}>
+                                                {collectionData.floorPrice ? (
+                                                    <div style={{ color: '#10b981', fontWeight: '600', fontSize: '0.875rem' }}>
+                                                        {collectionData.floorPrice.priceUSD ? (
+                                                            `$${(collectionData.floorPrice.priceUSD * collectionData.nfts.length).toLocaleString()}`
+                                                        ) : (
+                                                            `$${((collectionData.floorPrice.floorPrice * (tokenPrices['ethereum-native'] || 0)) * collectionData.nfts.length).toFixed(0)}`
+                                                        )}
+                                                    </div>
+                                                ) : (
+                                                    <span style={{ color: '#6b7280', fontSize: '0.75rem' }}>-</span>
+                                                )}
+                                            </td>
+                                        </tr>
+                                        );
+                                    })}
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+
+            {/* ADD THE CHART HERE - BEFORE the transaction table */}
+            {analysis && transactions.length > 0 && (
+                <div className="analysis-section">
+                    <NFTTradingChart transactions={transactions} />
+                </div>
+            )}
+
+
 
             <div className="analysis-section">
                 <h2>Transaction History</h2>

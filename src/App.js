@@ -22,8 +22,44 @@ function App() {
     const [addressToAnalyze, setAddressToAnalyze] = useState(null);
 
     useEffect(() => {
+        checkUrlParameters();
         checkConnection();
     }, []);
+
+    const checkUrlParameters = () => {
+        // Check if there's a wallet address in the URL
+        const urlParams = new URLSearchParams(window.location.search);
+        const walletParam = urlParams.get('wallet');
+        
+        if (walletParam) {
+            // Validate the address format
+            if (/^0x[a-fA-F0-9]{40}$/.test(walletParam)) {
+                console.log('🔗 Wallet address found in URL:', walletParam);
+                setAddressToAnalyze(walletParam);
+                setManualAddress(walletParam); // Also populate the input field
+                // Don't show error since we're auto-loading
+                setError(null);
+            } else {
+                setError('Invalid wallet address in URL parameter');
+            }
+        }
+    };
+
+    const updateUrlWithWallet = (address) => {
+        if (!address) return;
+        
+        const url = new URL(window.location);
+        const currentWallet = url.searchParams.get('wallet');
+        
+        // Only update if the address is different to avoid unnecessary updates
+        if (currentWallet !== address) {
+            url.searchParams.set('wallet', address);
+            
+            // Update URL without reloading the page
+            window.history.pushState({}, '', url.toString());
+            console.log('🔗 Updated URL with wallet address:', address);
+        }
+    };
 
     const checkConnection = async () => {
         if (typeof window.ethereum !== 'undefined') {
@@ -33,7 +69,15 @@ function App() {
                     // Fixed: Don't create a new provider, just use window.ethereum directly
                     setProvider(window.ethereum);
                     setAccount(accounts[0]);
-                    setAddressToAnalyze(accounts[0]);
+                    
+                    // Only set addressToAnalyze if there's no URL parameter (URL takes priority)
+                    const urlParams = new URLSearchParams(window.location.search);
+                    const walletParam = urlParams.get('wallet');
+                    
+                    if (!walletParam) {
+                        setAddressToAnalyze(accounts[0]);
+                        updateUrlWithWallet(accounts[0]);
+                    }
                 }
             } catch (error) {
                 console.error('Error checking connection:', error);
@@ -88,6 +132,9 @@ function App() {
             setAccount(accounts[0]);
             setAddressToAnalyze(accounts[0]);
             setManualAddress(''); // Clear manual input when wallet connects
+            
+            // Update URL with connected wallet address
+            updateUrlWithWallet(accounts[0]);
 
             // Add account change listener
             window.ethereum.on('accountsChanged', handleAccountsChanged);
@@ -115,6 +162,7 @@ function App() {
             // User switched accounts
             setAccount(accounts[0]);
             setAddressToAnalyze(accounts[0]);
+            updateUrlWithWallet(accounts[0]);
         }
     };
 
@@ -135,6 +183,11 @@ function App() {
         setAddressToAnalyze(null);
         setManualAddress('');
         setError(null);
+        
+        // Clear wallet parameter from URL
+        const url = new URL(window.location);
+        url.searchParams.delete('wallet');
+        window.history.pushState({}, '', url.toString());
     };
 
     const handleManualAddressSubmit = (e) => {
@@ -153,7 +206,11 @@ function App() {
             return;
         }
 
-        setAddressToAnalyze(manualAddress.trim());
+        const trimmedAddress = manualAddress.trim();
+        setAddressToAnalyze(trimmedAddress);
+        
+        // Update URL with observed wallet address
+        updateUrlWithWallet(trimmedAddress);
     };
 
     const handleAddressChange = (e) => {
@@ -168,6 +225,11 @@ function App() {
             // Only clear if no wallet is connected
             setError(null);
         }
+        
+        // Clear wallet parameter from URL
+        const url = new URL(window.location);
+        url.searchParams.delete('wallet');
+        window.history.pushState({}, '', url.toString());
     };
 
     return (
@@ -231,7 +293,7 @@ function App() {
             ) : (
                 <div>
                     <div className="wallet-info">
-                        <h3>📊 Analyzing Wallet</h3>
+                        <h3>Analyzing Wallet</h3>
                         <p>
                             <strong>Address:</strong> 
                             <a 
@@ -242,6 +304,19 @@ function App() {
                             >
                                 {addressToAnalyze}
                             </a>
+                            {!account && new URLSearchParams(window.location.search).get('wallet') && (
+                                <span style={{
+                                    marginLeft: '12px',
+                                    fontSize: '12px',
+                                    color: '#10b981',
+                                    backgroundColor: 'rgba(16, 185, 129, 0.1)',
+                                    padding: '2px 8px',
+                                    borderRadius: '12px',
+                                    border: '1px solid rgba(16, 185, 129, 0.2)'
+                                }}>
+                                    🔗 Loaded from URL
+                                </span>
+                            )}
                         </p>
                         <div className="wallet-actions">
                             {account && (
