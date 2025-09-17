@@ -1568,19 +1568,131 @@ function WalletAnalyzer({ account }) {
             });
         }
 
+        // Track transactions processed as Trade to avoid duplicates
+        const processedAsTrade = new Set();
+        
         // Process normal transactions FIRST (exactly like Python script)
         if (safeTxData.status === '1' && Array.isArray(safeTxData.result)) {
             safeTxData.result.forEach(tx => {
                 if (!tx || !tx.hash) return; // Skip invalid transactions
                 const date = new Date(parseInt(tx.timeStamp) * 1000);
                 
+                // ENHANCEMENT: Check if this transaction contains NFT transfers
+                if (nftByTx[tx.hash]) {
+                    // This transaction has NFT transfers, check if it should be labeled as Trade
+                    const nftsInTx = nftByTx[tx.hash];
+                    const userNftOut = nftsInTx.filter(nft => nft.from.toLowerCase() === account.toLowerCase());
+                    const userNftIn = nftsInTx.filter(nft => nft.to.toLowerCase() === account.toLowerCase());
+                    
+                    // If user is sending NFTs out (and no payment received), label as Trade
+                    if (userNftOut.length > 0 && parseInt(tx.value) === 0) {
+                        processedAsTrade.add(tx.hash); // Track this transaction
+                        transactions.push({
+                            hash: tx.hash,
+                            date: date,
+                            label: 'Trade',
+                            outgoingAsset: 'NFT',
+                            outgoingAmount: userNftOut.length.toString(),
+                            incomingAsset: '',
+                            incomingAmount: '',
+                            feeAsset: '',
+                            feeAmount: '',
+                            comment: `NFT Transfer (Out) - ${userNftOut.length} NFT(s) transferred: ${userNftOut.map(nft => `${nft.tokenName} #${nft.tokenID}`).join(', ')}`,
+                            type: 'nft',
+                            tokenId: userNftOut[0].tokenID,
+                            tokenName: userNftOut[0].tokenName,
+                            isTransfer: true
+                        });
+                        return; // Skip regular transaction processing
+                    }
+                    
+                    // If user is receiving NFTs (and no payment made), label as Trade
+                    if (userNftIn.length > 0 && parseInt(tx.value) === 0) {
+                        processedAsTrade.add(tx.hash); // Track this transaction
+                        transactions.push({
+                            hash: tx.hash,
+                            date: date,
+                            label: 'Trade',
+                            outgoingAsset: '',
+                            outgoingAmount: '',
+                            incomingAsset: 'NFT',
+                            incomingAmount: userNftIn.length.toString(),
+                            feeAsset: '',
+                            feeAmount: '',
+                            comment: `NFT Transfer (In) - ${userNftIn.length} NFT(s) received: ${userNftIn.map(nft => `${nft.tokenName} #${nft.tokenID}`).join(', ')}`,
+                            type: 'nft',
+                            tokenId: userNftIn[0].tokenID,
+                            tokenName: userNftIn[0].tokenName,
+                            isTransfer: true
+                        });
+                        return; // Skip regular transaction processing
+                    }
+                }
+                
                 // Label as Payment, APE Staked, or Deposit (enhanced logic)
                 let label, outgoingAsset, outgoingAmount, incomingAsset, incomingAmount;
                 
                 if (tx.from.toLowerCase() === account.toLowerCase()) {
-                    // Check if payment is to APE staking contract AND transaction was successful
-                    if (tx.to && tx.to.toLowerCase() === STAKING_CONTRACT.toLowerCase()) {
-                        const apeAmount = parseInt(tx.value) / 1e18;
+                    // Calculate APE amount from main transaction
+                    let apeAmount = parseInt(tx.value) / 1e18;
+                    let isActuallyDeposit = false; // Flag to track if this is really a deposit disguised as payment
+                    
+                    // ENHANCEMENT: If main transaction has 0 value, check internal transactions
+                    if (apeAmount === 0 && internalByTx[tx.hash]) {
+                        // Check outgoing internal transactions (user is paying)
+                        const ourInternalPayments = internalByTx[tx.hash].filter(
+                            itx => itx.from.toLowerCase() === account.toLowerCase()
+                        );
+                        
+                        // Check incoming internal transactions (user is receiving - e.g., marketplace sales)
+                        const ourInternalReceipts = internalByTx[tx.hash].filter(
+                            itx => itx.to.toLowerCase() === account.toLowerCase()
+                        );
+                        
+                        if (ourInternalPayments.length > 0) {
+                            // Sum all outgoing internal transactions for this payment
+                            const totalInternalApe = ourInternalPayments.reduce(
+                                (sum, itx) => sum + parseInt(itx.value), 0
+                            ) / 1e18;
+                            
+                            if (totalInternalApe > 0) {
+                                apeAmount = totalInternalApe;
+                                console.log(`🔍 Enhanced payment detection - Main tx: 0 APE, Outgoing Internal txs: ${apeAmount.toFixed(4)} APE`, {
+                                    hash: tx.hash,
+                                    mainValue: parseInt(tx.value) / 1e18,
+                                    internalValue: apeAmount,
+                                    internalCount: ourInternalPayments.length
+                                });
+                            }
+                        } else if (ourInternalReceipts.length > 0) {
+                            // This is likely a marketplace sale - user is receiving APE despite main tx being from user
+                            const totalInternalApe = ourInternalReceipts.reduce(
+                                (sum, itx) => sum + parseInt(itx.value), 0
+                            ) / 1e18;
+                            
+                            if (totalInternalApe > 0) {
+                                apeAmount = totalInternalApe;
+                                isActuallyDeposit = true; // Mark this as actually being a deposit
+                                console.log(`🔍 Enhanced sale detection - Main tx: 0 APE, Incoming Internal txs: ${apeAmount.toFixed(4)} APE (Marketplace Sale)`, {
+                                    hash: tx.hash,
+                                    mainValue: parseInt(tx.value) / 1e18,
+                                    internalValue: apeAmount,
+                                    internalCount: ourInternalReceipts.length
+                                });
+                            }
+                        }
+                    }
+                    
+                    // Determine transaction type based on whether this is actually a deposit
+                    if (isActuallyDeposit) {
+                        // This is actually a deposit (marketplace sale) even though main tx.from = user
+                        label = 'Deposit';
+                        outgoingAsset = '';
+                        outgoingAmount = '';
+                        incomingAsset = 'APE';
+                        incomingAmount = apeAmount.toString();
+                    } else if (tx.to && tx.to.toLowerCase() === STAKING_CONTRACT.toLowerCase()) {
+                        // Check if payment is to APE staking contract AND transaction was successful
                         console.log(`🔍 Staking contract transaction found - All fields:`, {
                             hash: tx.hash,
                             txreceipt_status: tx.txreceipt_status,
@@ -1614,22 +1726,53 @@ function WalletAnalyzer({ account }) {
                         } else {
                             label = 'Payment'; // Small amount but successful
                         }
+                        outgoingAsset = 'APE';
+                        outgoingAmount = apeAmount.toString();
+                        incomingAsset = '';
+                        incomingAmount = '';
                     } else {
+                        // Regular payment transaction
                         label = 'Payment';
+                        outgoingAsset = 'APE';
+                        outgoingAmount = apeAmount.toString();
+                        incomingAsset = '';
+                        incomingAmount = '';
                     }
-                    outgoingAsset = 'APE';
-                    outgoingAmount = (parseInt(tx.value) / 1e18).toString();
-                    incomingAsset = '';
-                    incomingAmount = '';
                 } else {
+                    // Calculate APE amount from main transaction
+                    let apeAmount = parseInt(tx.value) / 1e18;
+                    
+                    // ENHANCEMENT: If main transaction has 0 value, check internal transactions
+                    if (apeAmount === 0 && internalByTx[tx.hash]) {
+                        const ourInternalDeposits = internalByTx[tx.hash].filter(
+                            itx => itx.to.toLowerCase() === account.toLowerCase()
+                        );
+                        
+                        if (ourInternalDeposits.length > 0) {
+                            // Sum all incoming internal transactions for this deposit
+                            const totalInternalApe = ourInternalDeposits.reduce(
+                                (sum, itx) => sum + parseInt(itx.value), 0
+                            ) / 1e18;
+                            
+                            if (totalInternalApe > 0) {
+                                apeAmount = totalInternalApe;
+                                console.log(`🔍 Enhanced deposit detection - Main tx: 0 APE, Internal txs: ${apeAmount.toFixed(4)} APE`, {
+                                    hash: tx.hash,
+                                    mainValue: parseInt(tx.value) / 1e18,
+                                    internalValue: apeAmount,
+                                    internalCount: ourInternalDeposits.length
+                                });
+                            }
+                        }
+                    }
+                    
                     label = 'Deposit';
                     outgoingAsset = '';
                     outgoingAmount = '';
                     incomingAsset = 'APE';
-                    incomingAmount = (parseInt(tx.value) / 1e18).toString();
+                    incomingAmount = apeAmount.toString();
                 }
                 
-                const feeAsset = 'APE';
                 const gasPrice = tx.gasPrice || tx.gasPriceBid || '0';
                 let feeAmount = '';
                 try {
@@ -1637,6 +1780,7 @@ function WalletAnalyzer({ account }) {
                 } catch (e) {
                     feeAmount = '';
                 }
+                const feeAsset = feeAmount && parseFloat(feeAmount) > 0 ? 'APE' : '';
                 
                 transactions.push({
                     hash: tx.hash,
@@ -1694,7 +1838,7 @@ function WalletAnalyzer({ account }) {
                     incomingAmount = (parseInt(tokenTx.value) / Math.pow(10, tokenDecimals)).toString();
                 }
                 
-                const feeAsset = 'APE';
+                const feeAsset = '';
                 const feeAmount = '';
                 
                 transactions.push({
@@ -1829,9 +1973,14 @@ function WalletAnalyzer({ account }) {
                 }
                 
                 if (nft.from.toLowerCase() === account.toLowerCase()) {
+                    // Skip if this transaction was already processed as Trade
+                    if (processedAsTrade.has(nft.hash)) {
+                        return;
+                    }
+                    
                     // This is an outgoing NFT - check if it's a sale or transfer
                     let label = 'NFT Sale';
-                    const outgoingAsset = nft.tokenName;
+                    const outgoingAsset = 'NFT';  // Standardized to NFT
                     const outgoingAmount = '1';
                     let incomingAsset = 'APE';  // Default currency
                     let incomingAmount = '0';
@@ -1839,7 +1988,7 @@ function WalletAnalyzer({ account }) {
                     // Check if there's any payment received for this NFT
                     let paymentCurrency = null;
                     let paymentAmount = null;
-                    let comment = `Token ID: ${nft.tokenID}`;
+                    let comment = `Token ID: ${nft.tokenID} - Collection: ${nft.tokenName}`;
                     let isTransfer = false; // Flag to detect transfers
                     
                     // Check token transfers for this transaction
@@ -1873,17 +2022,17 @@ function WalletAnalyzer({ account }) {
                             const idx = batchNfts.indexOf(nft);
                             if (idx < ourInternalTxs.length) {
                                 paymentAmount = parseInt(ourInternalTxs[idx].value) / 1e18;
-                                comment = `Token ID: ${nft.tokenID} (Specific sale amount)`;
+                                comment = `Token ID: ${nft.tokenID} - Collection: ${nft.tokenName} (Specific sale amount)`;
                             }
                         } else {
                             // Sum all incoming value and divide by number of NFTs
                             const totalApe = ourInternalTxs.reduce((sum, itx) => sum + parseInt(itx.value), 0) / 1e18;
                             if (batchNfts.length > 0) {
                                 paymentAmount = totalApe / batchNfts.length;
-                                comment = `Token ID: ${nft.tokenID} (Estimated sale from batch)`;
+                                comment = `Token ID: ${nft.tokenID} - Collection: ${nft.tokenName} (Estimated sale from batch)`;
                             } else {
                                 paymentAmount = totalApe;
-                                comment = `Token ID: ${nft.tokenID} (Batch sale)`;
+                                comment = `Token ID: ${nft.tokenID} - Collection: ${nft.tokenName} (Batch sale)`;
                             }
                         }
                     }
@@ -1891,10 +2040,10 @@ function WalletAnalyzer({ account }) {
                     // **NEW LOGIC**: Check if this is a transfer (no payment received)
                     if (paymentAmount === null || paymentAmount === 0) {
                         // This is a transfer, not a sale
-                        label = 'NFT Transfer (Out)';
+                        label = 'Transfer';
                         incomingAsset = '';
                         incomingAmount = '';
-                        comment = `Token ID: ${nft.tokenID} (Transfer to another wallet - no payment received)`;
+                        comment = `Token ID: ${nft.tokenID} - Collection: ${nft.tokenName} - NFT Transfer (Out) - Transfer to another wallet, no payment received`;
                         isTransfer = true;
                     } else {
                         // This is a real sale with payment
@@ -1912,7 +2061,7 @@ function WalletAnalyzer({ account }) {
                         outgoingAmount: outgoingAmount,
                         incomingAsset: incomingAsset,
                         incomingAmount: incomingAmount,
-                        feeAsset: 'APE',
+                        feeAsset: '',
                         feeAmount: '',
                         comment: comment,
                         type: 'nft',
@@ -1921,14 +2070,20 @@ function WalletAnalyzer({ account }) {
                         isTransfer: isTransfer // Mark as transfer
                     });
                 } else {
+                    // Skip if this transaction was already processed as Trade
+                    if (processedAsTrade.has(nft.hash)) {
+                        return;
+                    }
+                    
                     // This is an incoming NFT - check if it's a purchase, transfer, or paid mint
-                    let label = 'NFT Purchase';
-                    const incomingAsset = nft.tokenName;
+                    let label = 'Trade';
+                    const incomingAsset = 'NFT';  // Standardized to NFT
                     const incomingAmount = '1';
                     let outgoingAsset = 'APE';  // Default currency
                     let outgoingAmount = '';
                     let isTransfer = false; // Flag to detect transfers
                     let isPaidMint = false; // Flag to detect paid mints
+                    let comment = `Token ID: ${nft.tokenID} - Collection: ${nft.tokenName}`;
                     
                     // Skip if from zero address and part of a burn transaction
                     if (nft.from.toLowerCase() === ZERO_ADDRESS.toLowerCase() && 
@@ -2025,8 +2180,8 @@ function WalletAnalyzer({ account }) {
                         
                         // **DECISION LOGIC**: Determine if this is a paid mint or free gift
                         if (mintPrice !== null && mintPrice > 0) {
-                            // This is a PAID MINT - treat as NFT Purchase
-                            label = 'NFT Purchase';
+                            // This is a PAID MINT - treat as Trade
+                            label = 'Trade';
                             outgoingAsset = mintCurrency;
                             outgoingAmount = mintPrice.toString();
                             isPaidMint = true;
@@ -2034,7 +2189,7 @@ function WalletAnalyzer({ account }) {
                             console.log(`✅ Paid mint detected: ${mintPrice} ${mintCurrency} for ${nft.tokenName} #${nft.tokenID}`);
                         } else {
                             // This is a FREE MINT/GIFT - requires manual review
-                            label = 'NFT Gift (Manual Review Required)';
+                            label = 'Airdrop';
                             outgoingAsset = '';
                             outgoingAmount = '';
                             
@@ -2042,7 +2197,7 @@ function WalletAnalyzer({ account }) {
                         }
                         
                         // Generate appropriate comment
-                        let comment = `Token ID: ${nft.tokenID}`;
+                        let comment = `Token ID: ${nft.tokenID} - Collection: ${nft.tokenName}`;
                         if (isPaidMint) {
                             const batchMints = nftByTx[txHash] ? nftByTx[txHash].filter(
                                 n => n.to.toLowerCase() === account.toLowerCase() && 
@@ -2066,7 +2221,7 @@ function WalletAnalyzer({ account }) {
                             outgoingAmount: outgoingAmount,
                             incomingAsset: incomingAsset,
                             incomingAmount: incomingAmount,
-                            feeAsset: 'APE',
+                            feeAsset: '',
                             feeAmount: '',
                             comment: comment,
                             type: 'nft',
@@ -2158,10 +2313,11 @@ function WalletAnalyzer({ account }) {
                     
                     // **NEW LOGIC**: Check if this is a transfer (no payment made)
                     if (purchasePrice === null || purchasePrice === 0) {
-                        // This is a transfer, not a purchase
-                        label = 'NFT Transfer (In)';
+                        // This is a transfer, not a purchase - label as Bounty for incoming NFTs
+                        label = 'Bounty';
                         outgoingAsset = '';
                         outgoingAmount = '';
+                        comment = `Token ID: ${nft.tokenID} - Collection: ${nft.tokenName} - NFT Transfer (In) - Transfer from another wallet, no payment made`;
                         isTransfer = true;
                     } else {
                         // This is a real purchase with payment
@@ -2174,7 +2330,6 @@ function WalletAnalyzer({ account }) {
                     }
                     
                     // Generate comment with token ID information
-                    let comment = `Token ID: ${nft.tokenID}`;
                     if (isTransfer) {
                         comment += ' (Transfer from another wallet - no payment made)';
                     } else {
@@ -2189,7 +2344,7 @@ function WalletAnalyzer({ account }) {
                         outgoingAsset = "APE";
                         outgoingAmount = "17";
                         isTransfer = false;
-                        label = 'NFT Purchase';
+                        label = 'Trade';
                     }
                     
                     // For the specific Goblin transaction
@@ -2197,7 +2352,7 @@ function WalletAnalyzer({ account }) {
                         outgoingAsset = "GEM";
                         outgoingAmount = "1000";
                         isTransfer = false;
-                        label = 'NFT Purchase';
+                        label = 'Trade';
                     }
                     
                     transactions.push({
@@ -2208,7 +2363,7 @@ function WalletAnalyzer({ account }) {
                         outgoingAmount: outgoingAmount,
                         incomingAsset: incomingAsset,
                         incomingAmount: incomingAmount,
-                        feeAsset: 'APE',
+                        feeAsset: '',
                         feeAmount: '',
                         comment: comment,
                         type: 'nft',
@@ -2238,7 +2393,7 @@ function WalletAnalyzer({ account }) {
                 const outgoingAmount = burnData.burned.length.toString();
                 const incomingAsset = mintedNfts;
                 const incomingAmount = burnData.minted.length.toString();
-                const feeAsset = 'APE';
+                const feeAsset = '';
                 const feeAmount = '';
                 
                 // Add a more descriptive comment for synthetic transactions (like Python)
@@ -2310,7 +2465,7 @@ function WalletAnalyzer({ account }) {
 
         // First pass: record NFT purchases (including paid mints, but NOT transfers)
         transactions.forEach((tx, index) => {
-            if ((tx.label === 'NFT Purchase' && tx.tokenId && !tx.isTransfer) || 
+            if ((tx.label === 'Trade' && tx.tokenId && !tx.isTransfer && tx.incomingAsset === 'NFT') || 
                 (tx.isPaidMint && tx.tokenId)) { // Include paid mints
                 
                 // Extract token ID from comment
@@ -2339,7 +2494,7 @@ function WalletAnalyzer({ account }) {
                     };
                     
                     const mintLabel = tx.isPaidMint ? '(Paid Mint)' : '';
-                    console.log(`Recorded NFT Purchase ${mintLabel}: ${key} for ${purchaseAmount} ${purchaseCurrency}`);
+                    console.log(`Recorded NFT Trade ${mintLabel}: ${key} for ${purchaseAmount} ${purchaseCurrency}`);
                 }
             }
         });
@@ -2410,17 +2565,17 @@ function WalletAnalyzer({ account }) {
             }
             
             // **NEW**: Handle transfer out - no profit/loss impact
-            if (tx.label === 'NFT Transfer (Out)' && tx.isTransfer) {
+            if (tx.label === 'Transfer' && tx.isTransfer && tx.comment && tx.comment.includes('NFT Transfer (Out)')) {
                 tx.comment += ' (Transfer - no profit/loss impact)';
             }
             
-            // **NEW**: Handle transfer in - no cost basis
-            if (tx.label === 'NFT Transfer (In)' && tx.isTransfer) {
-                tx.comment += ' (Transfer - no cost basis recorded)';
+            // **NEW**: Handle bounty in - no cost basis
+            if (tx.label === 'Bounty' && tx.isTransfer && tx.comment && tx.comment.includes('NFT Transfer (In)')) {
+                tx.comment += ' (Bounty - no cost basis recorded)';
             }
             
             // **NEW**: Handle APE Staking Rewards as profit
-            if (tx.label === 'APE Staking Reward') {
+            if (tx.label === 'Staking') {
                 const stakingAmount = parseFloat(tx.incomingAmount) || 0;
                 if (stakingAmount > 0) {
                     totalStakingRewards += stakingAmount;
@@ -2432,7 +2587,7 @@ function WalletAnalyzer({ account }) {
             }
             
             // **NEW**: Handle APE Church Rewards as profit
-            if (tx.label === 'APE Church Reward') {
+            if (tx.label === 'Cashback') {
                 const churchAmount = parseFloat(tx.incomingAmount) || 0;
                 if (churchAmount > 0) {
                     totalApeChurchRewards += churchAmount;
@@ -2444,7 +2599,7 @@ function WalletAnalyzer({ account }) {
             }
             
             // **NEW**: Handle Raffle Rewards as profit
-            if (tx.label === 'Raffle Reward') {
+            if (tx.label === 'Airdrop') {
                 const raffleAmount = parseFloat(tx.incomingAmount) || 0;
                 if (raffleAmount > 0) {
                     totalRaffleRewards += raffleAmount;
@@ -2495,12 +2650,12 @@ function WalletAnalyzer({ account }) {
         const headers = [
             'Date (UTC)', 'Integration Name', 'Label', 'Outgoing Asset', 'Outgoing Amount',
             'Incoming Asset', 'Incoming Amount', 'Fee Asset (optional)', 'Fee Amount (optional)',
-            'Comment (optional)', 'Trx. ID (optional)', 'profit', 'loss'
+            'Comment (optional)', 'Trx. ID (optional)'
         ];
         
         const csvData = transactions.map(tx => [
             tx.date.toISOString(),
-            '',
+            'APECHAIN',
             tx.label,
             tx.outgoingAsset || '',
             tx.outgoingAmount || '',
@@ -2509,9 +2664,7 @@ function WalletAnalyzer({ account }) {
             tx.feeAsset || '',
             tx.feeAmount || '',
             tx.comment || '',
-            tx.hash,
-            tx.profit || '0',
-            tx.loss || '0'
+            tx.hash
         ]);
         
         const csvContent = [headers, ...csvData]
@@ -3020,7 +3173,7 @@ function WalletAnalyzer({ account }) {
                                 stakingRewards.push({
                                     hash: tx.hash,
                                     date: date,
-                                    label: 'APE Staking Reward',
+                                    label: 'Staking',
                                     outgoingAsset: '',
                                     outgoingAmount: '',
                                     incomingAsset: 'APE',
@@ -3040,7 +3193,7 @@ function WalletAnalyzer({ account }) {
                                 const churchReward = {
                                     hash: tx.hash,
                                     date: date,
-                                    label: 'APE Church Reward',
+                                    label: 'Cashback',
                                     outgoingAsset: '',
                                     outgoingAmount: '',
                                     incomingAsset: 'APE',
@@ -3062,7 +3215,7 @@ function WalletAnalyzer({ account }) {
                                 const raffleReward = {
                                     hash: tx.hash,
                                     date: date,
-                                    label: 'Raffle Reward',
+                                    label: 'Airdrop',
                                     outgoingAsset: '',
                                     outgoingAmount: '',
                                     incomingAsset: 'APE',
