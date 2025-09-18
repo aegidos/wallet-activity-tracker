@@ -381,7 +381,8 @@ function WalletAnalyzer({ account }) {
             "Gift",
             "Prize",
             // Apes in Space - as mentioned in your code
-            "Apes in Space"
+            "Apes in Space",
+            "MB Coin"
             // Add more blacklisted token names/symbols here
         ].map(s => s.toLowerCase()); // normalize to lowercase for comparison
     };
@@ -3829,14 +3830,14 @@ function WalletAnalyzer({ account }) {
                                                 color: price > 0 ? '#10b981' : '#6b7280',
                                                 fontWeight: token.isNative ? '600' : 'normal'
                                             }}>
-                                                {price > 0 ? `$${price.toFixed(6)}` : 'N/A'}
+                                                {price > 0 ? `$${price.toFixed(2)}` : 'N/A'}
                                             </td>
                                             <td style={{ 
                                                 color: balanceUSD > 0 ? '#10b981' : '#6b7280',
                                                 fontWeight: (balanceUSD > 1 || token.isNative) ? '600' : 'normal',
                                                 fontSize: token.isNative ? '14px' : 'inherit'
                                             }}>
-                                                {balanceUSD > 0 ? `$${balanceUSD.toFixed(2)}` : '$0.00'}
+                                                {balanceUSD > 0 ? `$${balanceUSD.toFixed(0)}` : '$0'}
                                             </td>
                                         </tr>
                                     );

@@ -302,7 +302,7 @@ function App() {
                                 rel="noopener noreferrer"
                                 style={{color: '#3b82f6', textDecoration: 'none', marginLeft: '8px'}}
                             >
-                                {addressToAnalyze}
+                                {addressToAnalyze ? `${addressToAnalyze.slice(0, 7)}...${addressToAnalyze.slice(-5)}` : addressToAnalyze}
                             </a>
                             {!account && new URLSearchParams(window.location.search).get('wallet') && (
                                 <span style={{
