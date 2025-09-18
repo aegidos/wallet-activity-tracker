@@ -365,6 +365,57 @@ function WalletAnalyzer({ account }) {
         }
     };
 
+    // Token blacklist - add unwanted token names or symbols here
+    const getTokenBlacklist = () => {
+        return [
+            // Common scam/spam tokens
+            "Scam Token",
+            "Random Airdrop", 
+            "Ethereum Defi",
+            "Free Money",
+            "Airdrop",
+            "Visit Website",
+            "Claim",
+            "Reward",
+            "Bonus",
+            "Gift",
+            "Prize",
+            // Apes in Space - as mentioned in your code
+            "Apes in Space"
+            // Add more blacklisted token names/symbols here
+        ].map(s => s.toLowerCase()); // normalize to lowercase for comparison
+    };
+
+    // Filter function to remove blacklisted tokens
+    const filterBlacklistedTokens = (tokens, networkName = 'Unknown') => {
+        const blacklist = getTokenBlacklist();
+        const originalCount = tokens.length;
+        
+        const filtered = tokens.filter(token => {
+            const tokenName = (token.name || '').toLowerCase();
+            const tokenSymbol = (token.symbol || '').toLowerCase();
+            
+            // Check if token name or symbol is in blacklist
+            const isBlacklisted = blacklist.some(blacklistedItem => 
+                tokenName.includes(blacklistedItem) || tokenSymbol.includes(blacklistedItem)
+            );
+            
+            if (isBlacklisted) {
+                console.log(`🚫 Filtered out blacklisted token on ${networkName}: ${token.name || 'Unknown'} (${token.symbol || 'N/A'})`);
+                return false;
+            }
+            
+            return true;
+        });
+        
+        const filteredCount = originalCount - filtered.length;
+        if (filteredCount > 0) {
+            console.log(`🧹 Filtered out ${filteredCount} blacklisted tokens on ${networkName}`);
+        }
+        
+        return filtered;
+    };
+
     // Fetch token balances for both networks
     const fetchTokenBalances = async () => {
         if (!account) return;
@@ -475,21 +526,27 @@ function WalletAnalyzer({ account }) {
                 enrichedSolanaBalances = [];
             }
 
+            // Apply blacklist filter to remove unwanted tokens
+            const filteredEthereumBalances = filterBlacklistedTokens(enrichedEthereumBalances, 'Ethereum');
+            const filteredApeChainBalances = filterBlacklistedTokens(enrichedApeChainBalances, 'ApeChain');
+            const filteredBnbBalances = filterBlacklistedTokens(enrichedBnbBalances, 'BNB Chain');
+            const filteredSolanaBalances = filterBlacklistedTokens(enrichedSolanaBalances, 'Solana');
+
             // Debug logging to see token structure
             console.log('Raw Ethereum Balances:', ethereumBalances.tokenBalances);
-            console.log('Enriched Ethereum Balances:', enrichedEthereumBalances);
+            console.log('Filtered Ethereum Balances:', filteredEthereumBalances);
             console.log('Raw ApeChain Balances:', apechainBalances.tokenBalances);
-            console.log('Enriched ApeChain Balances:', enrichedApeChainBalances);
+            console.log('Filtered ApeChain Balances:', filteredApeChainBalances);
             console.log('Raw BNB Balances:', bnbBalances.tokenBalances);
-            console.log('Enriched BNB Balances:', enrichedBnbBalances);
+            console.log('Filtered BNB Balances:', filteredBnbBalances);
             console.log('Raw Solana Balances:', solanaBalances.tokenBalances);
-            console.log('Enriched Solana Balances:', enrichedSolanaBalances);
+            console.log('Filtered Solana Balances:', filteredSolanaBalances);
 
             // Fetch native balances
             await fetchNativeBalances();
 
-            // Combine all tokens for price fetching
-            const allTokens = [...enrichedEthereumBalances, ...enrichedApeChainBalances, ...enrichedBnbBalances, ...enrichedSolanaBalances];
+            // Combine all tokens for price fetching (using filtered tokens)
+            const allTokens = [...filteredEthereumBalances, ...filteredApeChainBalances, ...filteredBnbBalances, ...filteredSolanaBalances];
             
             // Start with Alchemy prices (if available)
             const alchemyPrices = {};
@@ -601,26 +658,26 @@ function WalletAnalyzer({ account }) {
                 }
             };
             
-            // Calculate token values by network with error handling
-            enrichedEthereumBalances.forEach(token => {
+            // Calculate token values by network with error handling (using filtered tokens)
+            filteredEthereumBalances.forEach(token => {
                 const tokenValue = calculateTokenValue(token, 'Ethereum');
                 tokenBreakdown.ethereum += tokenValue;
                 totalUSD += tokenValue;
             });
             
-            enrichedApeChainBalances.forEach(token => {
+            filteredApeChainBalances.forEach(token => {
                 const tokenValue = calculateTokenValue(token, 'ApeChain');
                 tokenBreakdown.apechain += tokenValue;
                 totalUSD += tokenValue;
             });
             
-            enrichedBnbBalances.forEach(token => {
+            filteredBnbBalances.forEach(token => {
                 const tokenValue = calculateTokenValue(token, 'BNB Chain');
                 tokenBreakdown.bnb += tokenValue;
                 totalUSD += tokenValue;
             });
             
-            enrichedSolanaBalances.forEach(token => {
+            filteredSolanaBalances.forEach(token => {
                 const tokenValue = calculateTokenValue(token, 'Solana');
                 tokenBreakdown.solana += tokenValue;
                 totalUSD += tokenValue;
@@ -647,10 +704,10 @@ function WalletAnalyzer({ account }) {
             // Enhanced logging for debugging
             console.log('=== TOTAL VALUE BREAKDOWN ===');
             console.log('Token Values by Network:');
-            console.log(`  Ethereum Tokens: $${tokenBreakdown.ethereum.toFixed(2)} (${enrichedEthereumBalances.length} tokens)`);
-            console.log(`  ApeChain Tokens: $${tokenBreakdown.apechain.toFixed(2)} (${enrichedApeChainBalances.length} tokens)`);
-            console.log(`  BNB Chain Tokens: $${tokenBreakdown.bnb.toFixed(2)} (${enrichedBnbBalances.length} tokens)`);
-            console.log(`  Solana Tokens: $${tokenBreakdown.solana.toFixed(2)} (${enrichedSolanaBalances.length} tokens)`);
+            console.log(`  Ethereum Tokens: $${tokenBreakdown.ethereum.toFixed(2)} (${filteredEthereumBalances.length} tokens)`);
+            console.log(`  ApeChain Tokens: $${tokenBreakdown.apechain.toFixed(2)} (${filteredApeChainBalances.length} tokens)`);
+            console.log(`  BNB Chain Tokens: $${tokenBreakdown.bnb.toFixed(2)} (${filteredBnbBalances.length} tokens)`);
+            console.log(`  Solana Tokens: $${tokenBreakdown.solana.toFixed(2)} (${filteredSolanaBalances.length} tokens)`);
             console.log('Native Token Values:');
             console.log(`  ETH: ${(nativeBalances.ethereum || 0).toFixed(6)} * $${ethPrice.toFixed(2)} = $${nativeValues.ethereum.toFixed(2)}`);
             console.log(`  APE: ${(nativeBalances.apechain || 0).toFixed(6)} * $${apePrice.toFixed(2)} = $${nativeValues.apechain.toFixed(2)}`);
@@ -677,10 +734,10 @@ function WalletAnalyzer({ account }) {
             
             // Set token balances - the TokenBalanceDisplay components will calculate and report their totals
             setTokenBalances({
-                ethereum: enrichedEthereumBalances,
-                apechain: enrichedApeChainBalances,
-                bnb: enrichedBnbBalances,
-                solana: enrichedSolanaBalances
+                ethereum: filteredEthereumBalances,
+                apechain: filteredApeChainBalances,
+                bnb: filteredBnbBalances,
+                solana: filteredSolanaBalances
             });
         } catch (err) {
             setError('Failed to fetch token balances: ' + err.message);
