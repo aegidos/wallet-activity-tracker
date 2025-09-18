@@ -163,6 +163,7 @@ function WalletAnalyzer({ account }) {
     const [nftPortfolio, setNftPortfolio] = useState([]);
     const [nftFloorPrices, setNftFloorPrices] = useState({});
     const [totalNftValueUSD, setTotalNftValueUSD] = useState(0);
+    const [nftCollectionValues, setNftCollectionValues] = useState({}); // Store calculated values for each collection
     const [networkTotals, setNetworkTotals] = useState({
         ethereum: 0,
         apechain: 0,
@@ -507,6 +508,16 @@ function WalletAnalyzer({ account }) {
             
             // Combine all price sources (Alchemy takes priority)
             const combinedPrices = { ...externalPrices, ...alchemyPrices, ...nativePrices };
+            
+            // Special case: WETH should have the same price as ETH
+            const nativeEthPrice = combinedPrices['ethereum-native'];
+            if (nativeEthPrice) {
+                // WETH contract address on Ethereum mainnet
+                const wethAddress = '0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2';
+                combinedPrices[wethAddress] = nativeEthPrice;
+                console.log(`🔄 Set WETH price to match ETH: $${nativeEthPrice.toFixed(2)}`);
+            }
+            
             setTokenPrices(combinedPrices);
             
             console.log(`Price sources: ${Object.keys(alchemyPrices).length} from Alchemy, ${Object.keys(externalPrices).length} from external APIs, ${Object.keys(nativePrices).length} native tokens`);
@@ -1029,9 +1040,44 @@ function WalletAnalyzer({ account }) {
         // Calculation will be triggered by useEffect when both nftPortfolio and nftFloorPrices are ready
     };
 
+    // Centralized function to calculate collection values - used by all displays
+    const calculateCollectionValue = (contractAddress, priceData, collectionNfts) => {
+        const floorPriceETH = priceData.floorPrice || 0;
+        const collectionCount = collectionNfts.length;
+        const currency = priceData.currency || 'ETH';
+        const ethPrice = tokenPrices['ethereum-native'] || 0;
+        
+        let floorPriceUSD;
+        if (currency === 'ETH') {
+            // For ETH currency: calculate using current ETH price from our token balances
+            if (floorPriceETH > 0 && ethPrice > 0) {
+                floorPriceUSD = floorPriceETH * ethPrice;
+            } else {
+                floorPriceUSD = 0;
+            }
+        } else {
+            // For non-ETH currencies: use Magic Eden USD price
+            floorPriceUSD = priceData.priceUSD || 0;
+        }
+        
+        const collectionValue = floorPriceUSD * collectionCount;
+        
+        return {
+            contractAddress,
+            collectionName: priceData.collectionName,
+            currency,
+            floorPriceETH,
+            floorPriceUSD,
+            collectionCount,
+            collectionValue,
+            ethPrice
+        };
+    };
+
     const calculateNftPortfolioValue = (floorPrices) => {
         let totalValue = 0;
         const ethPrice = tokenPrices['ethereum-native'] || 0;
+        const calculatedValues = {};
 
         console.log(`🔍 Calculating NFT portfolio value with:`, {
             nftCount: nftPortfolio.length,
@@ -1040,35 +1086,43 @@ function WalletAnalyzer({ account }) {
         });
 
         Object.entries(floorPrices).forEach(([contractAddress, priceData]) => {
-            const collectionNfts = nftPortfolio.filter(nft => 
-                nft.contract.address.toLowerCase() === contractAddress.toLowerCase()
-            );
+            // Deduplicate NFTs - same logic as table display
+            const seenNfts = new Set();
+            const uniqueCollectionNfts = [];
+            let duplicateCount = 0;
             
-            const floorPriceETH = priceData.floorPrice || 0;
-            const collectionCount = collectionNfts.length;
+            nftPortfolio.forEach(nft => {
+                if (nft.contract.address.toLowerCase() === contractAddress.toLowerCase()) {
+                    const nftKey = `${nft.contract.address}-${nft.tokenId}`;
+                    if (seenNfts.has(nftKey)) {
+                        duplicateCount++;
+                    } else {
+                        seenNfts.add(nftKey);
+                        uniqueCollectionNfts.push(nft);
+                    }
+                }
+            });
             
-            // Use Magic Eden USD price if available, otherwise calculate from ETH price
-            let floorPriceUSD;
-            if (priceData.priceUSD && priceData.priceUSD > 0) {
-                floorPriceUSD = priceData.priceUSD;
-                console.log(`💰 Using Magic Eden USD price: ${priceData.collectionName} = $${floorPriceUSD.toFixed(2)} (direct)`);
-            } else if (floorPriceETH > 0 && ethPrice > 0) {
-                floorPriceUSD = floorPriceETH * ethPrice;
-                console.log(`💰 Calculated USD price: ${priceData.collectionName} = ${floorPriceETH} ETH × $${ethPrice.toFixed(2)} = $${floorPriceUSD.toFixed(2)}`);
-            } else {
-                floorPriceUSD = 0;
-                console.warn(`⚠️ No price data available for ${priceData.collectionName}`);
-            }
+            // Use centralized calculation with deduplicated NFTs
+            const calcResult = calculateCollectionValue(contractAddress, priceData, uniqueCollectionNfts);
+            calcResult.duplicateCount = duplicateCount; // Add duplicate count for reference
+            calculatedValues[contractAddress.toLowerCase()] = calcResult;
             
-            const collectionValue = floorPriceUSD * collectionCount;
-            totalValue += collectionValue;
+            totalValue += calcResult.collectionValue;
             
-            if (collectionCount > 0) {
-                const currency = priceData.currency || 'ETH';
-                console.log(`💎 ${priceData.collectionName}: ${collectionCount} NFTs × ${floorPriceETH} ${currency} = $${collectionValue.toFixed(2)}`);
+            if (calcResult.collectionCount > 0) {
+                if (calcResult.currency === 'ETH') {
+                    console.log(`💰 Calculated USD price (ETH): ${calcResult.collectionName} = ${calcResult.floorPriceETH} ETH × $${calcResult.ethPrice.toFixed(2)} = $${calcResult.floorPriceUSD.toFixed(2)}`);
+                } else {
+                    console.log(`💰 Using Magic Eden USD price (${calcResult.currency}): ${calcResult.collectionName} = $${calcResult.floorPriceUSD.toFixed(2)}`);
+                }
+                const duplicateInfo = calcResult.duplicateCount > 0 ? ` (${calcResult.duplicateCount} duplicates excluded)` : '';
+                console.log(`💎 ${calcResult.collectionName}: ${calcResult.collectionCount} unique NFTs × $${calcResult.floorPriceUSD.toFixed(2)} = $${calcResult.collectionValue.toFixed(2)}${duplicateInfo}`);
             }
         });
 
+        // Store calculated values globally for use in table display
+        setNftCollectionValues(calculatedValues);
         setTotalNftValueUSD(totalValue);
         console.log(`🖼️ Total NFT Portfolio Value: $${totalValue.toFixed(2)} (Magic Eden pricing)`);
     };
@@ -1346,7 +1400,7 @@ function WalletAnalyzer({ account }) {
                 console.log(`Request URL: ${url}`);
                 
                 const response = await axios.get(url, {
-                    timeout: 30000 // 30 second timeout
+                    timeout: 60000 // Increased to 60 second timeout for large wallets
                 });
                 
                 const data = response.data;
@@ -1406,9 +1460,16 @@ function WalletAnalyzer({ account }) {
                 console.error(`Attempt ${attempt} failed for ${action}:`, error.message);
                 console.error(`Full error:`, error);
                 
+                // Check if it's a timeout error
+                const isTimeout = error.code === 'ECONNABORTED' || error.message.includes('timeout');
+                if (isTimeout) {
+                    console.warn(`⏱️ Timeout occurred for ${action} - API may be slow or overloaded`);
+                }
+                
                 if (attempt === maxRetries) {
                     // For the final attempt, return empty data instead of throwing
-                    console.warn(`All attempts failed for ${action}, returning empty result`);
+                    const failureReason = isTimeout ? 'API timeout' : 'connection error';
+                    console.warn(`❌ All attempts failed for ${action} due to ${failureReason}, returning empty result`);
                     return {
                         status: '1',
                         message: 'OK',
@@ -1416,9 +1477,10 @@ function WalletAnalyzer({ account }) {
                     };
                 }
                 
-                // More conservative delays for rate limit handling
-                const waitTime = Math.min(5000 * Math.pow(2, attempt - 1), 20000); // 5s, 10s, 20s (max)
-                console.log(`Waiting ${waitTime}ms before retry...`);
+                // More conservative delays, longer for timeouts
+                const baseDelay = isTimeout ? 10000 : 5000; // 10s for timeouts, 5s for other errors
+                const waitTime = Math.min(baseDelay * Math.pow(2, attempt - 1), 30000); // Up to 30s max
+                console.log(`⏳ Waiting ${waitTime}ms before retry (${isTimeout ? 'timeout recovery' : 'standard retry'})...`);
                 await new Promise(resolve => setTimeout(resolve, waitTime));
             }
         }
@@ -1427,6 +1489,11 @@ function WalletAnalyzer({ account }) {
     const fetchWalletData = async () => {
         setLoading(true);
         setError(null);
+        
+        // Reset state to prevent duplicate accumulation during re-analysis
+        setTransactions([]);
+        setAnalysis(null);
+        setStakingTransactions([]);
 
         try {
             console.log('=== STARTING SEQUENTIAL WALLET DATA FETCH ===');
@@ -1502,7 +1569,16 @@ function WalletAnalyzer({ account }) {
 
         } catch (error) {
             console.error('Error fetching wallet data:', error);
-            setError(`Failed to fetch wallet data: ${error.message}. Please check the console for details.`);
+            
+            // Provide more specific error messages for common issues
+            let errorMessage = `Failed to fetch wallet data: ${error.message}`;
+            if (error.message.includes('timeout')) {
+                errorMessage = `⏱️ Request timed out - ApeScan API may be overloaded. Please try again in a few minutes or check your internet connection.`;
+            } else if (error.message.includes('Network Error')) {
+                errorMessage = `🌐 Network error - Please check your internet connection and try again.`;
+            }
+            
+            setError(errorMessage);
         } finally {
             setLoading(false);
         }
@@ -1510,6 +1586,14 @@ function WalletAnalyzer({ account }) {
 
     const processWalletData = async (txData, nftData, internalData, tokenData, stakingRewardsData = []) => {
         console.log('=== PROCESSING WALLET DATA WITH VALIDATION ===');
+        
+        // API constants
+        const BASE_URL = 'https://api.apescan.io/api';
+        const API_KEY = process.env.REACT_APP_APESCAN_API_KEY || '8AIZVW9PAGT3UY6FCGRZFDJ51SZGDIG13X';
+        const ZERO_ADDRESS = '0x0000000000000000000000000000000000000000';
+        
+        // Staking contract constant
+        const STAKING_CONTRACT = '0x4ba2396086d52ca68a37d9c0fa364286e9c7835a';
         
         // Validate all input parameters to prevent undefined errors
         const safeTxData = txData && typeof txData === 'object' ? txData : { status: '0', result: [] };
@@ -1935,6 +2019,101 @@ function WalletAnalyzer({ account }) {
                     });
                 }
             });
+        }
+
+        // Process staking withdrawals from specific contract (0x4ba2396086d52ca68a37d9c0fa364286e9c7835a)
+        // Check transaction receipt event logs to detect WITHDRAW events only
+        const processedStakingTxs = new Set(); // Prevent duplicate processing
+        
+        for (const internalTxList of Object.values(internalByTx)) {
+            if (Array.isArray(internalTxList)) {
+                for (const internal of internalTxList) {
+                    if (internal.from && internal.from.toLowerCase() === STAKING_CONTRACT.toLowerCase() &&
+                        internal.value && parseFloat(internal.value) > 0 &&
+                        !processedStakingTxs.has(internal.hash)) {
+                        
+                        processedStakingTxs.add(internal.hash);
+                        
+                        try {
+                            // Fetch transaction receipt to get event logs
+                            console.log(`🔍 Checking transaction receipt for WITHDRAW event in ${internal.hash}...`);
+                            
+                            // Add delay to respect 2 req/sec rate limit
+                            await new Promise(resolve => setTimeout(resolve, 1000));
+                            
+                            const receiptUrl = `${BASE_URL}?module=proxy&action=eth_getTransactionReceipt&txhash=${internal.hash}&apikey=${API_KEY}`;
+                            const receiptResponse = await axios.get(receiptUrl, { timeout: 60000 });
+                            
+                            console.log(`🔍 Receipt response for ${internal.hash}:`, receiptResponse.data);
+                            
+                            if (receiptResponse && receiptResponse.data && receiptResponse.data.result && receiptResponse.data.result.logs) {
+                                const logs = receiptResponse.data.result.logs;
+                                console.log(`📋 Found ${logs.length} logs in receipt for ${internal.hash}`);
+                                let isWithdraw = false;
+                                
+                                // Check event logs for WITHDRAW events only
+                                logs.forEach(log => {
+                                    // Check if log is from staking contract
+                                    if (log.address && log.address.toLowerCase() === STAKING_CONTRACT.toLowerCase()) {
+                                        const topics = log.topics || [];
+                                        if (topics.length > 0) {
+                                            const eventSignature = topics[0];
+                                            
+                                            // Check for WITHDRAW event patterns
+                                            if (eventSignature.includes('0x67c680c232fa9400adef6a1ad234c1d6d15a44170b85fddb60ceed23e31c3220') ||
+                                                eventSignature.toLowerCase().includes('withdraw') ||
+                                                eventSignature.toLowerCase().includes('unstake') ||
+                                                log.data.includes('776974686472617727') || // "withdraw" in hex
+                                                log.data.includes('756e7374616b65')) { // "unstake" in hex
+                                                isWithdraw = true;
+                                                console.log(`✅ Found WITHDRAW event in log: ${eventSignature}`);
+                                            }
+                                        }
+                                    }
+                                });
+                                
+                                // Process WITHDRAW events only
+                                const stakeAmount = parseFloat(internal.value) / Math.pow(10, 18);
+                                const txHash = internal.hash;
+                                const date = new Date(parseInt(internal.timeStamp) * 1000);
+                                
+                                if (isWithdraw) {
+                                    console.log(`📉 Found WITHDRAW: ${stakeAmount} APE from ${internal.from} in tx ${txHash}`);
+                                    
+                                    // Create withdraw transaction entry (will subtract from staked amount at the end)
+                                    const withdrawTransaction = {
+                                        hash: txHash,
+                                        date: date,
+                                        label: 'Deposit',
+                                        outgoingAsset: '',
+                                        outgoingAmount: '',
+                                        incomingAsset: 'APE',
+                                        incomingAmount: stakeAmount.toString(),
+                                        feeAsset: '',
+                                        feeAmount: '',
+                                        comment: `Staking withdrawal from ${STAKING_CONTRACT}`,
+                                        type: 'transaction',
+                                        isStakingWithdraw: true,
+                                        stakingWithdrawAmount: stakeAmount // Track the withdrawal amount
+                                    };
+                                    
+                                    transactions.push(withdrawTransaction);
+                                    
+                                    console.log(`💎 Added WITHDRAW transaction: ${stakeAmount.toFixed(4)} APE (will be deducted from staked amount)`);
+                                } else {
+                                    console.log(`🔍 Staking transaction ${txHash} detected but no WITHDRAW event found (likely CLAIM - handled by fetchStakingRewards)`);
+                                }
+                                
+                            } else {
+                                console.log(`⚠️ No receipt logs found for tx ${internal.hash}`);
+                            }
+                            
+                        } catch (error) {
+                            console.error(`❌ Error checking transaction receipt for ${internal.hash}:`, error);
+                        }
+                    }
+                }
+            }
         }
 
         // Process NFT transfers (exactly like Python script - INDEPENDENT of regular transactions)
@@ -2430,13 +2609,22 @@ function WalletAnalyzer({ account }) {
         transactions.sort((a, b) => b.date - a.date); // Changed from a.date - b.date
         
         // At the end of processWalletData, before return:
-        // Calculate total staked APE amount
+        // Calculate total staked APE amount (staked - withdrawn)
         const totalStakedAPE = transactions
             .filter(tx => tx.label === 'APE Staked')
             .reduce((sum, tx) => sum + parseFloat(tx.outgoingAmount || 0), 0);
+            
+        const totalWithdrawnAPE = transactions
+            .filter(tx => tx.isStakingWithdraw)
+            .reduce((sum, tx) => sum + parseFloat(tx.stakingWithdrawAmount || tx.incomingAmount || 0), 0);
         
-        setStakedAPEAmount(totalStakedAPE);
-        console.log(`💎 Total APE Staked: ${totalStakedAPE.toFixed(4)} APE`);
+        const netStakedAPE = Math.max(0, totalStakedAPE - totalWithdrawnAPE);
+        
+        setStakedAPEAmount(netStakedAPE);
+        console.log(`💎 Staking Summary:`);
+        console.log(`   Total Staked: ${totalStakedAPE.toFixed(4)} APE`);
+        console.log(`   Total Withdrawn: ${totalWithdrawnAPE.toFixed(4)} APE`);
+        console.log(`   Net Staked: ${netStakedAPE.toFixed(4)} APE`);
         
         console.log('=== FINAL PROCESSING RESULTS ===');
         console.log(`Total transactions processed: ${transactions.length}`);
@@ -2574,15 +2762,20 @@ function WalletAnalyzer({ account }) {
                 tx.comment += ' (Bounty - no cost basis recorded)';
             }
             
-            // **NEW**: Handle APE Staking Rewards as profit
-            if (tx.label === 'Staking') {
-                const stakingAmount = parseFloat(tx.incomingAmount) || 0;
+            // **NEW**: Handle APE Staking Rewards as profit (ONLY actual staking rewards, not Church/Raffle)
+            if ((tx.label === 'Staking' || tx.label === 'Staking Reward') || 
+                (tx.isStakingReward && tx.contractType === 'staking')) {
+                const stakingAmount = parseFloat(tx.incomingAmount) || parseFloat(tx.incomingQuantity) || parseFloat(tx.profit_loss) || 0;
                 if (stakingAmount > 0) {
                     totalStakingRewards += stakingAmount;
                     totalProfit += stakingAmount;
                     tx.profit = stakingAmount;
-                    tx.comment += ` (Staking reward: ${stakingAmount.toFixed(4)} APE profit)`;
-                    console.log(`Added staking reward to profit: ${stakingAmount} APE`);
+                    
+                    // Add comment if not already present
+                    if (!tx.comment.includes('Staking reward')) {
+                        tx.comment += ` (Staking reward: ${stakingAmount.toFixed(4)} APE profit)`;
+                    }
+                    console.log(`✅ Added staking reward to profit: ${stakingAmount} APE (from ${tx.label})`);
                 }
             }
             
@@ -2706,7 +2899,7 @@ function WalletAnalyzer({ account }) {
                 return {
                     id: index,
                     date: tx.date.getTime(),
-                    dateFormatted: format(tx.date, 'MMM dd, yyyy'),
+                    dateFormatted: tx.date instanceof Date && !isNaN(tx.date) ? format(tx.date, 'MMM dd, yyyy') : 'Invalid Date',
                     purchasePrice: purchasePrice,
                     profitLoss: profitLoss,
                     bubbleSize: Math.abs(profitLoss) * 100 + 50,
@@ -2781,7 +2974,7 @@ function WalletAnalyzer({ account }) {
                             marginTop: '10px',
                             fontFamily: 'monospace'
                         }}>
-                            🔗 Tx: {data.hash.slice(0, 8)}...{data.hash.slice(-6)}
+                            🔗 Tx: {data.hash && typeof data.hash === 'string' ? `${data.hash.slice(0, 8)}...${data.hash.slice(-6)}` : 'No Hash'}
                         </div>
                         {isMobile && (
                             <div style={{
@@ -3032,6 +3225,7 @@ function WalletAnalyzer({ account }) {
                             domain={['dataMin', 'dataMax']}
                             tickFormatter={(timestamp) => {
                                 const date = new Date(timestamp);
+                                if (isNaN(date.getTime())) return 'Invalid';
                                 return isMobile ? format(date, 'M/d') : format(date, 'MMM dd');
                             }}
                             stroke="#9ca3af"
@@ -3142,8 +3336,13 @@ function WalletAnalyzer({ account }) {
     };
 
     const fetchStakingRewards = async () => {
+        // API constants
+        const BASE_URL = 'https://api.apescan.io/api';
+        const API_KEY = process.env.REACT_APP_APESCAN_API_KEY || '8AIZVW9PAGT3UY6FCGRZFDJ51SZGDIG13X';
+        
         const APECHURCH_CONTRACT = '0xD2A5c5F58BDBeD24EF919d9dfb312ca84E7B31dD';
         const ALLORAFFLE_CONTRACT = '0xCC558007E5BBb341fb236f52d3Ba5A0D55718F65';
+        const STAKING_CONTRACT = '0x4ba2396086d52ca68a37d9c0fa364286e9c7835a'; // APE Staking contract
         const stakingRewards = [];
         
         try {
@@ -3155,37 +3354,109 @@ function WalletAnalyzer({ account }) {
             
             if (response.data.status === '1' && Array.isArray(response.data.result)) {
                 console.log(`📊 Found ${response.data.result.length} internal transactions, checking for rewards from all contracts...`);
+                console.log('🔍 Target account:', account.toLowerCase());
+                console.log('🔍 Target staking contract:', STAKING_CONTRACT.toLowerCase());
                 
                 const apeChurchRewardsData = [];
                 const raffleRewardsData = [];
                 
-                response.data.result.forEach(tx => {
+                for (const tx of response.data.result) {
                     // Check if this is from any of our tracked contracts TO our wallet
                     if (tx.to.toLowerCase() === account.toLowerCase()) {
                         const rewardAmount = parseInt(tx.value) / 1e18;
+                        
+                        // Debug logging for all internal transactions to this wallet
+                        console.log(`🔍 Internal TX: ${tx.hash} | From: ${tx.from} | To: ${tx.to} | Amount: ${rewardAmount.toFixed(6)} APE`);
                         
                         // Only include meaningful rewards (filter out dust/zero amounts)
                         if (rewardAmount > 0.001) {
                             const date = new Date(parseInt(tx.timeStamp) * 1000);
                             
-                            // APE Staking Contract
+                            // Debug: Check if this is from staking contract
+                            console.log(`🔍 Checking if ${tx.from.toLowerCase()} === ${STAKING_CONTRACT.toLowerCase()}: ${tx.from.toLowerCase() === STAKING_CONTRACT.toLowerCase()}`);
+                            
+                            // APE Staking Contract - check transaction receipt for CLAIM vs WITHDRAW
                             if (tx.from.toLowerCase() === STAKING_CONTRACT.toLowerCase()) {
-                                stakingRewards.push({
-                                    hash: tx.hash,
-                                    date: date,
-                                    label: 'Staking',
-                                    outgoingAsset: '',
-                                    outgoingAmount: '',
-                                    incomingAsset: 'APE',
-                                    incomingAmount: rewardAmount.toFixed(6),
-                                    feeAsset: '',
-                                    feeAmount: '',
-                                    comment: `Staking reward received from APE staking contract (${rewardAmount.toFixed(4)} APE)`,
-                                    type: 'staking_reward',
-                                    isStakingReward: true,
-                                    contractType: 'staking'
-                                });
-                                console.log(`✅ Found staking reward: ${rewardAmount.toFixed(4)} APE on ${date.toDateString()}`);
+                                try {
+                                    // Fetch transaction receipt to get event logs
+                                    console.log(`🔍 Checking receipt for staking tx ${tx.hash}...`);
+                                    
+                                    // Add delay to respect 2 req/sec rate limit
+                                    await new Promise(resolve => setTimeout(resolve, 1000));
+                                    
+                                    const receiptUrl = `${BASE_URL}?module=proxy&action=eth_getTransactionReceipt&txhash=${tx.hash}&apikey=${API_KEY}`;
+                                    const receiptResponse = await axios.get(receiptUrl, { timeout: 60000 });
+                                    
+                                    console.log(`🔍 Receipt response for ${tx.hash}:`, receiptResponse.data);
+                                    
+                                    console.log(`🔍 Receipt response for ${tx.hash}:`, JSON.stringify(receiptResponse.data, null, 2));
+                                    
+                                    if (receiptResponse && receiptResponse.data && receiptResponse.data.result && receiptResponse.data.result.logs) {
+                                        const logs = receiptResponse.data.result.logs;
+                                        console.log(`📋 Found ${logs.length} logs in receipt for ${tx.hash}`);
+                                        console.log(`📋 Found ${logs.length} logs in receipt for ${tx.hash}`);
+                                        let isClaim = false;
+                                        let isWithdraw = false;
+                                        
+                                        // Check event logs for CLAIM or WITHDRAW events
+                                        logs.forEach(log => {
+                                            if (log.address && log.address.toLowerCase() === STAKING_CONTRACT.toLowerCase()) {
+                                                const topics = log.topics || [];
+                                                if (topics.length > 0) {
+                                                    const eventSignature = topics[0];
+                                                    
+                                                    // Check for CLAIM event patterns (comprehensive)
+                                                    if (eventSignature.includes('0x45c072aa05b9853b5a993de7a28bc332ee01404a628cec1a23ce0f659f842ef1') ||
+                                                        eventSignature.toLowerCase().includes('claim') ||
+                                                        log.data.includes('636c61696d')) { // "claim" in hex
+                                                        isClaim = true;
+                                                        console.log(`✅ Found CLAIM event in fetchStakingRewards: ${eventSignature}`);
+                                                    }
+                                                    
+                                                    // Check for WITHDRAW event patterns (comprehensive)
+                                                    if (eventSignature.includes('0x67c680c232fa9400adef6a1ad234c1d6d15a44170b85fddb60ceed23e31c3220') ||
+                                                        eventSignature.toLowerCase().includes('withdraw') ||
+                                                        eventSignature.toLowerCase().includes('unstake') ||
+                                                        log.data.includes('776974686472617727') || // "withdraw" in hex
+                                                        log.data.includes('756e7374616b65')) { // "unstake" in hex
+                                                        isWithdraw = true;
+                                                        console.log(`✅ Found WITHDRAW event in fetchStakingRewards: ${eventSignature}`);
+                                                    }
+                                                }
+                                            }
+                                        });
+                                        
+                                        // Only add to staking rewards if it's a CLAIM event
+                                        if (isClaim) {
+                                            stakingRewards.push({
+                                                hash: tx.hash,
+                                                date: date,
+                                                label: 'Staking',
+                                                outgoingAsset: '',
+                                                outgoingAmount: '',
+                                                incomingAsset: 'APE',
+                                                incomingAmount: rewardAmount.toFixed(6),
+                                                feeAsset: '',
+                                                feeAmount: '',
+                                                comment: `Staking reward received from APE staking contract (${rewardAmount.toFixed(4)} APE)`,
+                                                type: 'staking_reward',
+                                                isStakingReward: true,
+                                                contractType: 'staking'
+                                            });
+                                            console.log(`✅ Found CLAIM reward: ${rewardAmount.toFixed(4)} APE on ${date.toDateString()}`);
+                                        } else if (isWithdraw) {
+                                            console.log(`📉 Found WITHDRAW in fetchStakingRewards: ${rewardAmount.toFixed(4)} APE on ${date.toDateString()} (will be handled by processWalletData)`);
+                                            // Don't add to stakingRewards - WITHDRAW events are handled in processWalletData
+                                        } else {
+                                            console.log(`⚠️ Unknown staking event type in tx ${tx.hash} - neither CLAIM nor WITHDRAW detected in fetchStakingRewards`);
+                                        }
+                                    } else {
+                                        console.log(`❌ No receipt logs found for transaction ${tx.hash} in fetchStakingRewards`);
+                                        console.log(`Receipt structure:`, receiptResponse?.data?.result);
+                                    }
+                                } catch (error) {
+                                    console.error(`❌ Error checking receipt for ${tx.hash}:`, error);
+                                }
                             }
                             
                             // APE Church Contract  
@@ -3233,7 +3504,7 @@ function WalletAnalyzer({ account }) {
                             }
                         }
                     }
-                });
+                }
                 
                 // Update separate state arrays
                 setApeChurchRewards(apeChurchRewardsData);
@@ -3550,28 +3821,28 @@ function WalletAnalyzer({ account }) {
                             <div className="stat-label">NFT Trades</div>
                         </div>
                         <div className="stat-card">
-                            <div className="stat-value">{analysis.totalProfit.toFixed(4)} APE</div>
+                            <div className="stat-value">{Math.round(analysis.totalProfit)} APE</div>
                             <div className="stat-label">Total Profit</div>
                         </div>
                         <div className="stat-card">
-                            <div className="stat-value">{analysis.totalLoss.toFixed(4)} APE</div>
+                            <div className="stat-value">{Math.round(analysis.totalLoss)} APE</div>
                             <div className="stat-label">Total Loss</div>
                         </div>
                         <div className="stat-card" style={{borderLeftColor: '#8b5cf6'}}>
                             <div className="stat-value" style={{color: '#8b5cf6'}}>
-                                {(analysis.totalStakingRewards || 0).toFixed(4)} APE
+                                {includeStaking ? Math.round(analysis.totalStakingRewards || 0) : 0} APE
                             </div>
                             <div className="stat-label">Staking Rewards</div>
                         </div>
                         <div className="stat-card" style={{borderLeftColor: '#f59e0b'}}>
                             <div className="stat-value" style={{color: '#f59e0b'}}>
-                                {(analysis.totalApeChurchRewards || 0).toFixed(4)} APE
+                                {includeStaking ? Math.round(analysis.totalApeChurchRewards || 0) : 0} APE
                             </div>
                             <div className="stat-label">APE Church</div>
                         </div>
                         <div className="stat-card" style={{borderLeftColor: '#ec4899'}}>
                             <div className="stat-value" style={{color: '#ec4899'}}>
-                                {(analysis.totalRaffleRewards || 0).toFixed(4)} APE
+                                {includeStaking ? Math.round(analysis.totalRaffleRewards || 0) : 0} APE
                             </div>
                             <div className="stat-label">Raffles</div>
                         </div>
@@ -3579,7 +3850,7 @@ function WalletAnalyzer({ account }) {
                         {includeStaking && stakedAPEAmount > 0 && (
                             <div className="stat-card" style={{borderLeftColor: '#ff6b35'}}>
                                 <div className="stat-value" style={{color: '#ff6b35'}}>
-                                    {stakedAPEAmount.toFixed(4)} APE
+                                    {Math.round(stakedAPEAmount)} APE
                                 </div>
                                 <div className="stat-label">Staked APE</div>
                                 <div style={{
@@ -3588,13 +3859,13 @@ function WalletAnalyzer({ account }) {
                                     marginTop: '4px',
                                     fontStyle: 'italic'
                                 }}>
-                                    ${((stakedAPEAmount * (tokenPrices['apechain-native'] || 0)).toFixed(2))}
+                                    ${Math.round(stakedAPEAmount * (tokenPrices['apechain-native'] || 0))}
                                 </div>
                             </div>
                         )}
                         <div className="stat-card" style={{borderLeftColor: '#06b6d4'}}>
                             <div className="stat-value" style={{color: '#06b6d4'}}>
-                                ${totalTokenValueUSD.toFixed(2)}
+                                ${Math.round(totalTokenValueUSD)}
                             </div>
                             <div className="stat-label">Total Portfolio Value</div>
                             <div style={{
@@ -3627,7 +3898,7 @@ function WalletAnalyzer({ account }) {
                         )}
                         <div className="stat-card" style={{borderLeftColor: analysis.netProfit >= 0 ? '#10b981' : '#ef4444'}}>
                             <div className="stat-value" style={{color: analysis.netProfit >= 0 ? '#10b981' : '#ef4444'}}>
-                                {analysis.netProfit >= 0 ? '+' : ''}{analysis.netProfit.toFixed(4)} APE
+                                {analysis.netProfit >= 0 ? '+' : ''}{Math.round(analysis.netProfit)} APE
                             </div>
                             <div className="stat-label">Net Profit/Loss</div>
                         </div>
@@ -3931,6 +4202,12 @@ function WalletAnalyzer({ account }) {
                                 <tbody>
                                     {Object.entries(
                                         nftPortfolio.reduce((acc, nft) => {
+                                            // Skip NFTs without proper contract address
+                                            if (!nft || !nft.contract || !nft.contract.address) {
+                                                console.warn('Skipping NFT with missing contract address:', nft);
+                                                return acc;
+                                            }
+                                            
                                             const contractAddress = nft.contract.address;
                                             const nftKey = `${contractAddress}-${nft.tokenId}`;
                                             
@@ -3969,17 +4246,46 @@ function WalletAnalyzer({ account }) {
                                             return acc;
                                         }, {})
                                     )
-                                    // Sort by estimated value descending
-                                    .sort(([, a], [, b]) => {
-                                        const getEstValue = (collectionData) => {
-                                            if (!collectionData.floorPrice) return 0;
-                                            
-                                            const priceUSD = collectionData.floorPrice.priceUSD || 
-                                                (collectionData.floorPrice.floorPrice * (tokenPrices['ethereum-native'] || 0));
-                                            return priceUSD * collectionData.nfts.length; // Use actual unique NFT count
-                                        };
+                                    // Sort by estimated value descending (highest value first)
+                                    .sort(([contractAddressA, collectionDataA], [contractAddressB, collectionDataB]) => {
+                                        // Use the pre-calculated values from the global state for consistent sorting
+                                        const calculatedValueA = nftCollectionValues[contractAddressA?.toLowerCase()];
+                                        const calculatedValueB = nftCollectionValues[contractAddressB?.toLowerCase()];
                                         
-                                        return getEstValue(b) - getEstValue(a);
+                                        let valueA = calculatedValueA ? calculatedValueA.collectionValue : 0;
+                                        let valueB = calculatedValueB ? calculatedValueB.collectionValue : 0;
+                                        
+                                        // Fallback calculation if centralized values aren't ready yet
+                                        if (valueA === 0 && collectionDataA.floorPrice) {
+                                            const currency = collectionDataA.floorPrice.currency || 'ETH';
+                                            if (currency === 'ETH') {
+                                                const currentEthPrice = tokenPrices['ethereum-native'] || 0;
+                                                const floorPriceETH = collectionDataA.floorPrice.floorPrice || 0;
+                                                valueA = floorPriceETH * currentEthPrice * collectionDataA.nfts.length;
+                                            } else {
+                                                const magicEdenUSD = collectionDataA.floorPrice.priceUSD || 0;
+                                                valueA = magicEdenUSD * collectionDataA.nfts.length;
+                                            }
+                                        }
+                                        
+                                        if (valueB === 0 && collectionDataB.floorPrice) {
+                                            const currency = collectionDataB.floorPrice.currency || 'ETH';
+                                            if (currency === 'ETH') {
+                                                const currentEthPrice = tokenPrices['ethereum-native'] || 0;
+                                                const floorPriceETH = collectionDataB.floorPrice.floorPrice || 0;
+                                                valueB = floorPriceETH * currentEthPrice * collectionDataB.nfts.length;
+                                            } else {
+                                                const magicEdenUSD = collectionDataB.floorPrice.priceUSD || 0;
+                                                valueB = magicEdenUSD * collectionDataB.nfts.length;
+                                            }
+                                        }
+                                        
+                                        // Sort descending (highest value first)
+                                        return valueB - valueA;
+                                    })
+                                    .filter(([contractAddress, collectionData]) => {
+                                        // Filter out any invalid entries
+                                        return contractAddress && collectionData && typeof contractAddress === 'string';
                                     })
                                     .map(([contractAddress, collectionData], index) => {
                                         const isDuplicate = collectionData.duplicateCount > 0;
@@ -3998,7 +4304,10 @@ function WalletAnalyzer({ account }) {
                                                     marginTop: '0.25rem',
                                                     fontFamily: 'monospace'
                                                 }}>
-                                                    {contractAddress.slice(0, 6)}...{contractAddress.slice(-4)}
+                                                    {contractAddress && typeof contractAddress === 'string' ? 
+                                                        `${contractAddress.slice(0, 6)}...${contractAddress.slice(-4)}` : 
+                                                        'Invalid Address'
+                                                    }
                                                 </div>
                                                 {collectionData.duplicateCount > 0 && (
                                                     <div style={{ 
@@ -4058,17 +4367,19 @@ function WalletAnalyzer({ account }) {
                                                 )}
                                             </td>
                                             <td style={{ padding: '1rem', textAlign: 'right', verticalAlign: 'top' }}>
-                                                {collectionData.floorPrice ? (
-                                                    <div style={{ color: '#10b981', fontWeight: '600', fontSize: '0.875rem' }}>
-                                                        {collectionData.floorPrice.priceUSD ? (
-                                                            `$${(collectionData.floorPrice.priceUSD * collectionData.nfts.length).toLocaleString()}`
-                                                        ) : (
-                                                            `$${((collectionData.floorPrice.floorPrice * (tokenPrices['ethereum-native'] || 0)) * collectionData.nfts.length).toFixed(0)}`
-                                                        )}
-                                                    </div>
-                                                ) : (
-                                                    <span style={{ color: '#6b7280', fontSize: '0.75rem' }}>-</span>
-                                                )}
+                                                {(() => {
+                                                    // Use the pre-calculated value from global state
+                                                    const calculatedValue = nftCollectionValues[contractAddress.toLowerCase()];
+                                                    if (calculatedValue && calculatedValue.collectionValue > 0) {
+                                                        return (
+                                                            <div style={{ color: '#10b981', fontWeight: '600', fontSize: '0.875rem' }}>
+                                                                ${calculatedValue.collectionValue.toFixed(0)}
+                                                            </div>
+                                                        );
+                                                    } else {
+                                                        return <span style={{ color: '#6b7280', fontSize: '0.75rem' }}>-</span>;
+                                                    }
+                                                })()}
                                             </td>
                                         </tr>
                                         );
@@ -4181,7 +4492,7 @@ function WalletAnalyzer({ account }) {
                             <tbody>
                                 {sortedTransactions.map((tx, index) => (
                                     <tr key={index}>
-                                        <td>{format(tx.date, 'MMM dd, yyyy HH:mm')}</td>
+                                        <td>{tx.date instanceof Date && !isNaN(tx.date) ? format(tx.date, 'MMM dd, yyyy HH:mm') : 'Invalid Date'}</td>
                                         <td>
                                             <span className={`label-${tx.label.toLowerCase().replace(' ', '-')}`}>
                                                 {tx.label}
@@ -4248,7 +4559,10 @@ function WalletAnalyzer({ account }) {
                                                 rel="noopener noreferrer"
                                                 style={{color: '#3b82f6', textDecoration: 'none'}}
                                             >
-                                                {tx.hash.slice(0, 8)}...{tx.hash.slice(-6)}
+                                                {tx.hash && typeof tx.hash === 'string' ? 
+                                                    `${tx.hash.slice(0, 8)}...${tx.hash.slice(-6)}` : 
+                                                    'No Hash'
+                                                }
                                             </a>
                                         </td>
                                     </tr>
