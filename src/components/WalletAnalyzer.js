@@ -78,6 +78,10 @@ const API_KEY = process.env.REACT_APP_ETHERSCAN_API_KEY;
 const BASE_URL = 'https://api.etherscan.io/v2/api?chainid=33139';
 const ZERO_ADDRESS = '0x0000000000000000000000000000000000000000';
 
+// Debug: Log API keys to console (remove in production)
+console.log('ALCHEMY_API_KEY:', ALCHEMY_API_KEY ? 'Set' : 'Missing');
+console.log('API_KEY:', API_KEY ? 'Set' : 'Missing');
+
 // Initialize Alchemy SDK for all supported networks
 const initializeAlchemySDK = (network) => {
     let alchemyNetwork;
@@ -184,6 +188,10 @@ function WalletAnalyzer({ account }) {
     const [apeChurchRewards, setApeChurchRewards] = useState([]);
     const [raffleRewards, setRaffleRewards] = useState([]);
     const [fetchingFloorPrices, setFetchingFloorPrices] = useState(false);
+    const [tokenDataLoaded, setTokenDataLoaded] = useState(false);
+
+    // Navigation state for header menu
+    const [activeTab, setActiveTab] = useState('Portfolio');
 
     // Fetch token prices using free APIs (Alchemy + Binance fallback)
     const fetchTokenPrices = async (tokens) => {
@@ -670,6 +678,8 @@ function WalletAnalyzer({ account }) {
             
             console.log(`Price sources: ${Object.keys(alchemyPrices).length} from Alchemy, ${Object.keys(externalPrices).length} from external APIs, ${Object.keys(nativePrices).length} native tokens`);
 
+            // Manual calculation removed - TokenBalanceDisplay components will report their totals directly
+
             // Calculate total USD value with improved error handling
             let totalUSD = 0;
             let tokenBreakdown = {
@@ -830,6 +840,7 @@ function WalletAnalyzer({ account }) {
                 bnb: filteredBnbBalances,
                 solana: filteredSolanaBalances
             });
+            setTokenDataLoaded(true);
         } catch (err) {
             setError('Failed to fetch token balances: ' + err.message);
             console.error('Error fetching token balances:', err);
@@ -1221,6 +1232,7 @@ function WalletAnalyzer({ account }) {
 
     // Fetch token balances and NFT portfolio when account changes
     useEffect(() => {
+        setTokenDataLoaded(false); // Reset loading state
         fetchTokenBalances();
         fetchNftPortfolio();
     }, [account]);
@@ -1231,40 +1243,25 @@ function WalletAnalyzer({ account }) {
         }
     }, [account]);
 
-    // Simple callback functions to collect network totals
-    const handleNetworkTotal = React.useCallback((network) => (total) => {
-        setNetworkTotals(prev => {
-            // Only update if the value actually changed
-            if (prev[network] === total) {
-                return prev;
-            }
-            
-            const updated = { ...prev, [network]: total };
-            
-            // Check if all networks have reported their totals (including 0 values)
-            const networkKeys = ['ethereum', 'apechain', 'bnb', 'solana'];
-            const allNetworksReported = networkKeys.every(key => updated[key] !== undefined);
-            
-            if (allNetworksReported) {
-                const basePortfolioTotal = Object.values(updated).reduce((sum, val) => sum + (val || 0), 0);
-                
-                // Add staked APE value and NFT value to portfolio total
-                const apePrice = tokenPrices['apechain-native'] || 0;
-                const stakedAPEValue = stakedAPEAmount * apePrice;
-                const portfolioTotal = basePortfolioTotal + stakedAPEValue + totalNftValueUSD;
-                
-                // Only update if the total actually changed
-                setTotalTokenValueUSD(currentTotal => {
-                    if (Math.abs(currentTotal - portfolioTotal) > 0.01) { // Only update if difference > 1 cent
-                        console.log(`📊 Portfolio Total Updated: $${portfolioTotal.toFixed(2)} (base: $${basePortfolioTotal.toFixed(2)} + staked: $${stakedAPEValue.toFixed(2)} + NFTs: $${totalNftValueUSD.toFixed(2)})`);
-                        return portfolioTotal;
+    // Callback to collect network totals from TokenBalanceDisplay components
+    const handleNetworkTotal = React.useCallback((network) => {
+        let timeoutId;
+        return (total) => {
+            // Debounce rapid updates to prevent infinite loops
+            clearTimeout(timeoutId);
+            timeoutId = setTimeout(() => {
+                setNetworkTotals(prev => {
+                    // Only update if the value actually changed to prevent infinite loops
+                    if (Math.abs((prev[network] || 0) - total) < 0.01) {
+                        return prev; // No change, return same object to prevent re-render
                     }
-                    return currentTotal;
+                    
+                    console.log(`📊 ${network} reported total: $${total.toFixed(2)} (was: $${(prev[network] || 0).toFixed(2)})`);
+                    const updated = { ...prev, [network]: total };
+                    return updated;
                 });
-            }
-            
-            return updated;
-        });
+            }, 100); // 100ms debounce
+        };
     }, []);
 
     // Recalculate portfolio total when staked APE amount or NFT value changes
@@ -1272,7 +1269,7 @@ function WalletAnalyzer({ account }) {
         const apePrice = tokenPrices['apechain-native'] || 0;
         const stakedAPEValue = stakedAPEAmount * apePrice;
         
-        // Get current network totals
+        // Get current network totals from TokenBalanceDisplay components
         const baseTotal = Object.values(networkTotals).reduce((sum, val) => sum + (val || 0), 0);
         const newPortfolioTotal = baseTotal + stakedAPEValue + totalNftValueUSD;
         
@@ -3691,9 +3688,9 @@ function WalletAnalyzer({ account }) {
             return calculateNetworkTotalUSD();
         }, [networkBalances, tokenPrices, nativeBalances, isEthereum, isApeChain, isBnb, isSolana]);
 
-        // Report the total to parent component once when values change
+        // Report the total to parent component when values change
         React.useEffect(() => {
-            if (onTotalCalculated && networkTotalUSD !== undefined) {
+            if (onTotalCalculated && networkTotalUSD !== undefined && networkTotalUSD > 0) {
                 onTotalCalculated(networkTotalUSD);
             }
         }, [networkTotalUSD, onTotalCalculated]);
@@ -3894,8 +3891,76 @@ function WalletAnalyzer({ account }) {
 
     return (
         <div>
-            {/* Wallet Analysis Summary - moved to top */}
-            {analysis && (
+            {/* Header Navigation Menu - Absolute Top Sticky */}
+            <div style={{
+                position: 'fixed',
+                top: '0',
+                left: '0',
+                right: '0',
+                background: 'linear-gradient(135deg, #0a0a0a 0%, #1a1a2e 25%, #16213e 50%, #0f0f23 75%, #000000 100%)',
+                borderBottom: '2px solid rgba(31, 81, 255, 0.3)',
+                boxShadow: '0 4px 12px rgba(0, 0, 0, 0.5)',
+                zIndex: 10000,
+                padding: '1rem 0'
+            }}>
+                <div style={{
+                    display: 'flex',
+                    justifyContent: 'center',
+                    gap: '2rem',
+                    maxWidth: '1200px',
+                    margin: '0 auto',
+                    padding: '0 1rem'
+                }}>
+                    {['Portfolio', 'Tokens', 'NFTs', 'Transactions'].map((tab) => (
+                        <button
+                            key={tab}
+                            onClick={() => setActiveTab(tab)}
+                            style={{
+                                background: activeTab === tab ? 'linear-gradient(135deg, rgba(31, 81, 255, 0.8) 0%, rgba(31, 81, 255, 0.6) 100%)' : 'transparent',
+                                color: activeTab === tab ? '#FFFFFF' : '#e0e0e0',
+                                border: '1px solid',
+                                borderColor: activeTab === tab ? 'rgba(31, 81, 255, 0.3)' : 'rgba(255, 255, 255, 0.1)',
+                                padding: '0.75rem 1.5rem',
+                                borderRadius: '12px',
+                                cursor: 'pointer',
+                                fontSize: '1rem',
+                                fontWeight: activeTab === tab ? '600' : '500',
+                                transition: 'all 0.2s ease',
+                                minWidth: '120px',
+                                boxShadow: activeTab === tab ? '0 0 10px rgba(31, 81, 255, 0.3)' : 'none',
+                                textShadow: activeTab === tab ? '0 0 8px rgba(31, 81, 255, 0.3)' : 'none'
+                            }}
+                            onMouseEnter={(e) => {
+                                if (activeTab !== tab) {
+                                    e.target.style.borderColor = 'rgba(31, 81, 255, 0.5)';
+                                    e.target.style.color = '#4D7FFF';
+                                    e.target.style.backgroundColor = 'rgba(31, 81, 255, 0.1)';
+                                    e.target.style.textShadow = '0 0 8px rgba(31, 81, 255, 0.3)';
+                                }
+                            }}
+                            onMouseLeave={(e) => {
+                                if (activeTab !== tab) {
+                                    e.target.style.borderColor = 'rgba(255, 255, 255, 0.1)';
+                                    e.target.style.color = '#e0e0e0';
+                                    e.target.style.backgroundColor = 'transparent';
+                                    e.target.style.textShadow = 'none';
+                                }
+                            }}
+                        >
+                            {tab}
+                        </button>
+                    ))}
+                </div>
+            </div>
+
+            {/* Main Content Wrapper - with padding for fixed header */}
+            <div style={{ 
+                paddingTop: '100px', // Adjust based on header height
+                minHeight: '100vh'
+            }}>
+
+            {/* Portfolio Section */}
+            {activeTab === 'Portfolio' && analysis && (
                 <div className="analysis-section">
                     <h2>Wallet Analysis Summary</h2>
                     <div className="stats-grid">
@@ -3952,7 +4017,10 @@ function WalletAnalyzer({ account }) {
                         )}
                         <div className="stat-card" style={{borderLeftColor: '#06b6d4'}}>
                             <div className="stat-value" style={{color: '#06b6d4'}}>
-                                ${Math.round(totalTokenValueUSD)}
+                                {tokenDataLoaded && (Object.values(networkTotals).some(total => total > 0) || totalNftValueUSD > 0) ? 
+                                    `$${Math.round(totalTokenValueUSD)}` : 
+                                    'Loading...'
+                                }
                             </div>
                             <div className="stat-label">Total Portfolio Value</div>
                             <div style={{
@@ -4133,7 +4201,38 @@ function WalletAnalyzer({ account }) {
                 )}
             </div>
 
-            {/* Display Token Balances for both networks */}
+            {/* Hidden TokenBalanceDisplay components - always rendered to calculate totals */}
+            <div style={{ display: 'none' }}>
+                <TokenBalanceDisplay 
+                    networkBalances={tokenBalances.ethereum} 
+                    networkName="Ethereum Mainnet" 
+                    onTotalCalculated={handleNetworkTotal('ethereum')}
+                />
+                <TokenBalanceDisplay 
+                    networkBalances={tokenBalances.apechain} 
+                    networkName="ApeChain" 
+                    onTotalCalculated={handleNetworkTotal('apechain')}
+                />
+                <TokenBalanceDisplay 
+                    networkBalances={tokenBalances.bnb} 
+                    networkName="BNB Chain" 
+                    onTotalCalculated={handleNetworkTotal('bnb')}
+                />
+                <TokenBalanceDisplay 
+                    networkBalances={tokenBalances.solana} 
+                    networkName="Solana" 
+                    onTotalCalculated={handleNetworkTotal('solana')}
+                />
+            </div>
+
+            {/* Tokens Section */}
+            {activeTab === 'Tokens' && (
+            <div>
+                <h2 style={{ color: '#e5e7eb', marginBottom: '2rem', fontSize: '2rem', fontWeight: '600', textAlign: 'center' }}>
+                    Token Portfolio
+                </h2>
+
+                {/* Display Token Balances for both networks */}
             <div className="network-balances" style={{
                 display: 'grid',
                 gridTemplateColumns: 'repeat(auto-fit, minmax(600px, 1fr))',
@@ -4149,7 +4248,6 @@ function WalletAnalyzer({ account }) {
                     <TokenBalanceDisplay 
                         networkBalances={tokenBalances.ethereum} 
                         networkName="Ethereum Mainnet" 
-                        onTotalCalculated={handleNetworkTotal('ethereum')}
                     />
                 </div>
                 <div style={{
@@ -4161,7 +4259,6 @@ function WalletAnalyzer({ account }) {
                     <TokenBalanceDisplay 
                         networkBalances={tokenBalances.apechain} 
                         networkName="ApeChain" 
-                        onTotalCalculated={handleNetworkTotal('apechain')}
                     />
                 </div>
                 <div style={{
@@ -4173,7 +4270,6 @@ function WalletAnalyzer({ account }) {
                     <TokenBalanceDisplay 
                         networkBalances={tokenBalances.bnb} 
                         networkName="BNB Chain" 
-                        onTotalCalculated={handleNetworkTotal('bnb')}
                     />
                 </div>
                 <div style={{
@@ -4185,13 +4281,21 @@ function WalletAnalyzer({ account }) {
                     <TokenBalanceDisplay 
                         networkBalances={tokenBalances.solana} 
                         networkName="Solana" 
-                        onTotalCalculated={handleNetworkTotal('solana')}
                     />
                 </div>
             </div>
-            
-            {/* NFT Portfolio Section */}
-            {nftPortfolio.length > 0 && (
+            </div>
+            )}
+
+            {/* NFTs Section */}
+            {activeTab === 'NFTs' && (
+            <div>
+                <h2 style={{ color: '#e5e7eb', marginBottom: '2rem', fontSize: '2rem', fontWeight: '600', textAlign: 'center' }}>
+                    NFT Collection
+                </h2>
+
+                {/* NFT Portfolio Section */}
+                {nftPortfolio.length > 0 && (
                 <div style={{ marginTop: '2rem', marginBottom: '2rem' }}>
                     <h2 style={{ color: '#e5e7eb', marginBottom: '1rem', fontSize: '1.5rem', fontWeight: '600' }}>
                         NFT Portfolio
@@ -4465,10 +4569,18 @@ function WalletAnalyzer({ account }) {
                     </div>
                 </div>
             )}
+            </div>
+            )}
 
+            {/* Transactions Section */}
+            {activeTab === 'Transactions' && (
+            <div>
+                <h2 style={{ color: '#e5e7eb', marginBottom: '2rem', fontSize: '2rem', fontWeight: '600', textAlign: 'center' }}>
+                    Transaction History
+                </h2>
 
-            {/* ADD THE CHART HERE - BEFORE the transaction table */}
-            {analysis && transactions.length > 0 && (
+                {/* ADD THE CHART HERE - BEFORE the transaction table */}
+                {analysis && transactions.length > 0 && (
                 <div className="analysis-section">
                     <NFTTradingChart transactions={transactions} />
                 </div>
@@ -4651,6 +4763,10 @@ function WalletAnalyzer({ account }) {
                     </div>
                 )}
             </div>
+            </div>
+            )}
+
+            </div> {/* Close Main Content Wrapper */}
         </div>
     );
 }
