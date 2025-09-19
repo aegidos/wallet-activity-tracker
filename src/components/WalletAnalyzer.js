@@ -192,6 +192,13 @@ function WalletAnalyzer({ account }) {
 
     // Navigation state for header menu
     const [activeTab, setActiveTab] = useState('Portfolio');
+    
+    // Screen size state for responsive design
+    const [screenSize, setScreenSize] = useState({
+        width: typeof window !== 'undefined' ? window.innerWidth : 1200,
+        isMobile: typeof window !== 'undefined' ? window.innerWidth <= 480 : false,
+        isTablet: typeof window !== 'undefined' ? window.innerWidth <= 768 : false
+    });
 
     // Fetch token prices using free APIs (Alchemy + Binance fallback)
     const fetchTokenPrices = async (tokens) => {
@@ -1319,6 +1326,23 @@ function WalletAnalyzer({ account }) {
             calculateNftPortfolioValue(nftFloorPrices);
         }
     }, [nftPortfolio, nftFloorPrices, tokenPrices]);
+
+    // Handle window resize for responsive design
+    useEffect(() => {
+        const handleResize = () => {
+            const width = window.innerWidth;
+            setScreenSize({
+                width,
+                isMobile: width <= 480,
+                isTablet: width <= 768
+            });
+        };
+
+        if (typeof window !== 'undefined') {
+            window.addEventListener('resize', handleResize);
+            return () => window.removeEventListener('resize', handleResize);
+        }
+    }, []);
 
     // Calculate total directly from token balances and native balances (no complex state management)
     const calculateTotalPortfolioValue = () => {
@@ -3906,10 +3930,12 @@ function WalletAnalyzer({ account }) {
                 <div style={{
                     display: 'flex',
                     justifyContent: 'center',
-                    gap: '2rem',
+                    gap: screenSize.isMobile ? '0.25rem' : screenSize.isTablet ? '0.75rem' : '2rem',
                     maxWidth: '1200px',
                     margin: '0 auto',
-                    padding: '0 1rem'
+                    padding: screenSize.isMobile ? '0 0.25rem' : '0 0.5rem',
+                    flexWrap: 'nowrap',
+                    overflow: 'hidden'
                 }}>
                     {['Portfolio', 'Tokens', 'NFTs', 'Transactions'].map((tab) => (
                         <button
@@ -3920,15 +3946,18 @@ function WalletAnalyzer({ account }) {
                                 color: activeTab === tab ? '#FFFFFF' : '#e0e0e0',
                                 border: '1px solid',
                                 borderColor: activeTab === tab ? 'rgba(31, 81, 255, 0.3)' : 'rgba(255, 255, 255, 0.1)',
-                                padding: '0.75rem 1.5rem',
-                                borderRadius: '12px',
+                                padding: screenSize.isMobile ? '0.4rem 0.5rem' : screenSize.isTablet ? '0.6rem 0.8rem' : '0.75rem 1.5rem',
+                                borderRadius: screenSize.isMobile ? '8px' : '12px',
                                 cursor: 'pointer',
-                                fontSize: '1rem',
+                                fontSize: screenSize.isMobile ? '0.75rem' : screenSize.isTablet ? '0.85rem' : '1rem',
                                 fontWeight: activeTab === tab ? '600' : '500',
                                 transition: 'all 0.2s ease',
-                                minWidth: '120px',
+                                minWidth: 'auto',
                                 boxShadow: activeTab === tab ? '0 0 10px rgba(31, 81, 255, 0.3)' : 'none',
-                                textShadow: activeTab === tab ? '0 0 8px rgba(31, 81, 255, 0.3)' : 'none'
+                                textShadow: activeTab === tab ? '0 0 8px rgba(31, 81, 255, 0.3)' : 'none',
+                                flex: screenSize.isMobile ? '1' : 'none',
+                                textAlign: 'center',
+                                whiteSpace: 'nowrap'
                             }}
                             onMouseEnter={(e) => {
                                 if (activeTab !== tab) {
