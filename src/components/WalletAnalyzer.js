@@ -3,6 +3,7 @@ import axios from 'axios';
 import { format } from 'date-fns';
 import { ScatterChart, Scatter, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell } from 'recharts';
 import { Alchemy, Network } from 'alchemy-sdk';
+import { insertPortfolioSnapshot } from '../utils/supabase';
 
 // APE Staking Contract Addressf
 const STAKING_CONTRACT = '0x4Ba2396086d52cA68a37D9C0FA364286e9c7835a';
@@ -73,8 +74,8 @@ if (typeof window !== 'undefined') {
 }
 
 const ALCHEMY_API_KEY = process.env.NEXT_PUBLIC_ALCHEMY_API_KEY || 'Lx58kkNIJtKmG_mSohRWLvxzxJj_iNW-';
-const API_KEY = process.env.REACT_APP_APESCAN_API_KEY || '8AIZVW9PAGT3UY6FCGRZFDJ51SZGDIG13X';
-const BASE_URL = 'https://api.apescan.io/api';
+const API_KEY = process.env.REACT_APP_ETHERSCAN_API_KEY || '9ETRRM36MW3RVS1WQ58US3HFWAPEB4KCX1';
+const BASE_URL = 'https://api.etherscan.io/v2/api?chainid=33139';
 const ZERO_ADDRESS = '0x0000000000000000000000000000000000000000';
 
 // Initialize Alchemy SDK for all supported networks
@@ -423,35 +424,107 @@ function WalletAnalyzer({ account }) {
 
         setLoading(true);
         try {
-            // Fetch Ethereum Mainnet token balances with metadata
+            // Helper function to fetch all token balances with pagination
+            const fetchAllTokenBalances = async (alchemySDK, networkName) => {
+                console.log(`🔍 Starting token balance fetch for ${networkName}...`);
+                let allTokens = [];
+                let pageKey = null;
+                let pageCount = 0;
+                const maxCount = 100; // Fetch 100 tokens per page
+                
+                do {
+                    pageCount++;
+                    console.log(`📊 Fetching ${networkName} tokens page ${pageCount}${pageKey ? ` (continuing pagination...)` : ' (initial page)'}...`);
+                    
+                    const requestOptions = {
+                        type: 'erc20',
+                        maxCount: maxCount
+                    };
+                    
+                    // Add pageKey for continuation if we have one
+                    if (pageKey) {
+                        requestOptions.pageKey = pageKey;
+                    }
+                    
+                    const tokenBalances = await alchemySDK.core.getTokenBalances(account, requestOptions);
+                    
+                    console.log(`📈 Page ${pageCount}: Found ${tokenBalances.tokenBalances.length} tokens on ${networkName}`);
+                    
+                    // Add tokens from this page to our collection
+                    allTokens.push(...tokenBalances.tokenBalances);
+                    
+                    // Update pageKey for next iteration
+                    pageKey = tokenBalances.pageKey;
+                    
+                    // Continue if we have a pageKey (more pages available)
+                } while (pageKey);
+                
+                if (pageCount > 1) {
+                    console.log(`🎯 ${networkName} PAGINATION USED: Total ${allTokens.length} tokens found across ${pageCount} pages`);
+                } else {
+                    console.log(`✅ ${networkName}: ${allTokens.length} tokens found (no pagination needed)`);
+                }
+                
+                return { tokenBalances: allTokens };
+            };
+
+            // Fetch Ethereum Mainnet token balances with pagination
             const ethereumAlchemy = initializeAlchemySDK('ethereum');
-            const ethereumBalances = await ethereumAlchemy.core.getTokenBalances(account, {
-                type: 'erc20',
-                maxCount: 100
-            });
+            const ethereumBalances = await fetchAllTokenBalances(ethereumAlchemy, 'Ethereum');
 
-            // Fetch ApeChain token balances with metadata
+            // Fetch ApeChain token balances with pagination
             const apechainAlchemy = initializeAlchemySDK('apechain');
-            const apechainBalances = await apechainAlchemy.core.getTokenBalances(account, {
-                type: 'erc20',
-                maxCount: 100
-            });
+            const apechainBalances = await fetchAllTokenBalances(apechainAlchemy, 'ApeChain');
 
-            // Fetch BNB Chain token balances with metadata
+            // Fetch BNB Chain token balances with pagination
             const bnbAlchemy = initializeAlchemySDK('bnb');
-            const bnbBalances = await bnbAlchemy.core.getTokenBalances(account, {
-                type: 'erc20',
-                maxCount: 100
-            });
+            const bnbBalances = await fetchAllTokenBalances(bnbAlchemy, 'BNB Chain');
 
-            // Fetch Solana token balances with metadata (different API for non-EVM chain)
+            // Fetch Solana token balances with pagination (different API for non-EVM chain)
             let solanaBalances = { tokenBalances: [] };
             try {
                 const solanaAlchemy = initializeAlchemySDK('solana');
-                // For Solana, we need to use a different method
-                // Solana uses getTokenBalances but without the 'type' parameter
-                solanaBalances = await solanaAlchemy.core.getTokenBalances(account);
-                console.log('Solana token balances fetched successfully:', solanaBalances);
+                
+                // Helper function for Solana token pagination (without 'type' parameter)
+                const fetchAllSolanaTokens = async () => {
+                    console.log(`🔍 Starting Solana token balance fetch...`);
+                    let allTokens = [];
+                    let pageKey = null;
+                    let pageCount = 0;
+                    const maxCount = 100;
+                    
+                    do {
+                        pageCount++;
+                        console.log(`📊 Fetching Solana tokens page ${pageCount}${pageKey ? ` (continuing pagination...)` : ' (initial page)'}...`);
+                        
+                        const requestOptions = {
+                            maxCount: maxCount
+                            // Note: Solana doesn't use 'type' parameter
+                        };
+                        
+                        if (pageKey) {
+                            requestOptions.pageKey = pageKey;
+                        }
+                        
+                        const tokenBalances = await solanaAlchemy.core.getTokenBalances(account, requestOptions);
+                        
+                        console.log(`📈 Page ${pageCount}: Found ${tokenBalances.tokenBalances.length} tokens on Solana`);
+                        
+                        allTokens.push(...tokenBalances.tokenBalances);
+                        pageKey = tokenBalances.pageKey;
+                        
+                    } while (pageKey);
+                    
+                    if (pageCount > 1) {
+                        console.log(`🎯 Solana PAGINATION USED: Total ${allTokens.length} tokens found across ${pageCount} pages`);
+                    } else {
+                        console.log(`✅ Solana: ${allTokens.length} tokens found (no pagination needed)`);
+                    }
+                    
+                    return { tokenBalances: allTokens };
+                };
+                
+                solanaBalances = await fetchAllSolanaTokens();
             } catch (solanaError) {
                 console.warn('Failed to fetch Solana token balances, skipping:', solanaError.message);
                 solanaBalances = { tokenBalances: [] };
@@ -533,15 +606,32 @@ function WalletAnalyzer({ account }) {
             const filteredBnbBalances = filterBlacklistedTokens(enrichedBnbBalances, 'BNB Chain');
             const filteredSolanaBalances = filterBlacklistedTokens(enrichedSolanaBalances, 'Solana');
 
-            // Debug logging to see token structure
-            console.log('Raw Ethereum Balances:', ethereumBalances.tokenBalances);
-            console.log('Filtered Ethereum Balances:', filteredEthereumBalances);
-            console.log('Raw ApeChain Balances:', apechainBalances.tokenBalances);
-            console.log('Filtered ApeChain Balances:', filteredApeChainBalances);
-            console.log('Raw BNB Balances:', bnbBalances.tokenBalances);
-            console.log('Filtered BNB Balances:', filteredBnbBalances);
-            console.log('Raw Solana Balances:', solanaBalances.tokenBalances);
-            console.log('Filtered Solana Balances:', filteredSolanaBalances);
+            // Comprehensive token fetching summary
+            const totalRawTokens = ethereumBalances.tokenBalances.length + 
+                                 apechainBalances.tokenBalances.length + 
+                                 bnbBalances.tokenBalances.length + 
+                                 (solanaBalances.tokenBalances?.length || 0);
+            
+            const totalFilteredTokens = filteredEthereumBalances.length + 
+                                      filteredApeChainBalances.length + 
+                                      filteredBnbBalances.length + 
+                                      filteredSolanaBalances.length;
+
+            console.log('\n=== 🪙 TOKEN BALANCE FETCH SUMMARY ===');
+            console.log(`📊 Raw Tokens Found:`);
+            console.log(`   • Ethereum: ${ethereumBalances.tokenBalances.length} tokens`);
+            console.log(`   • ApeChain: ${apechainBalances.tokenBalances.length} tokens`);
+            console.log(`   • BNB Chain: ${bnbBalances.tokenBalances.length} tokens`);
+            console.log(`   • Solana: ${solanaBalances.tokenBalances?.length || 0} tokens`);
+            console.log(`   🎯 TOTAL RAW: ${totalRawTokens} tokens`);
+            console.log(`\n🧹 After Blacklist Filtering:`);
+            console.log(`   • Ethereum: ${filteredEthereumBalances.length} tokens`);
+            console.log(`   • ApeChain: ${filteredApeChainBalances.length} tokens`);
+            console.log(`   • BNB Chain: ${filteredBnbBalances.length} tokens`);
+            console.log(`   • Solana: ${filteredSolanaBalances.length} tokens`);
+            console.log(`   ✅ TOTAL FILTERED: ${totalFilteredTokens} tokens`);
+            console.log(`   🚫 Filtered out: ${totalRawTokens - totalFilteredTokens} spam/scam tokens`);
+            console.log('========================================\n');
 
             // Fetch native balances
             await fetchNativeBalances();
@@ -834,37 +924,11 @@ function WalletAnalyzer({ account }) {
 
             console.log(`🎯 Total NFTs found across all networks: ${allNfts.length}`);
 
-            // Debug: Check for specific collections you mentioned
-            const alloPassAddress = '0x88f1A6D167531adC34aB24c6B22A9E99bbd77E3F'.toLowerCase();
-            const gsOnApeAddress = '0xb3443b6bd585ba4118cae2bedb61c7ec4a8281df'.toLowerCase();
-            
-            console.log('🔍 Debugging specific collections:');
-            console.log('AlloPass (0x88f1A6D167531adC34aB24c6B22A9E99bbd77E3F):');
-            const alloPassNfts = allNfts.filter(nft => nft.contract.address.toLowerCase() === alloPassAddress);
-            console.log(`  - Found ${alloPassNfts.length} AlloPass NFTs`);
-            if (alloPassNfts.length > 0) {
-                console.log(`  - First NFT:`, alloPassNfts[0]);
-                console.log(`  - Collection name: "${alloPassNfts[0].contract.name}"`);
-                console.log(`  - Network: ${alloPassNfts[0].network}`);
-            }
-            
-            console.log('G\'s on Ape (0xb3443b6bd585ba4118cae2bedb61c7ec4a8281df):');
-            const gsOnApeNfts = allNfts.filter(nft => nft.contract.address.toLowerCase() === gsOnApeAddress);
-            console.log(`  - Found ${gsOnApeNfts.length} G's on Ape NFTs`);
-            if (gsOnApeNfts.length > 0) {
-                console.log(`  - First NFT:`, gsOnApeNfts[0]);
-                console.log(`  - Collection name: "${gsOnApeNfts[0].contract.name}"`);
-                console.log(`  - Network: ${gsOnApeNfts[0].network}`);
-            }
-
             // Show all collections found
             console.log('📋 All collections found by Alchemy:');
             Object.entries(collectionMap).forEach(([address, collection]) => {
                 console.log(`  - ${collection.name || 'Unknown'} (${address.slice(0,8)}...): ${collection.nfts.length} NFTs on ${collection.networkDisplayName}`);
             });
-
-            // Check if specific collections are missing and try to fetch them manually
-            await checkMissingCollections(allNfts, collectionMap);
 
             // Fetch floor prices for each collection
             await fetchFloorPrices(collectionMap);
@@ -878,63 +942,7 @@ function WalletAnalyzer({ account }) {
         }
     };
 
-    // Function to manually check for specific collections that might be missing
-    const checkMissingCollections = async (allNfts, collectionMap) => {
-        const specificCollections = [
-            { address: '0x88f1A6D167531adC34aB24c6B22A9E99bbd77E3F', name: 'AlloPass', network: 'ethereum' },
-            { address: '0xb3443b6bd585ba4118cae2bedb61c7ec4a8281df', name: 'G\'s on Ape', network: 'apechain' }
-        ];
 
-        console.log('🔍 Checking for specific collections that might be missing...');
-
-        for (const collection of specificCollections) {
-            const collectionExists = collectionMap[collection.address.toLowerCase()];
-            
-            if (!collectionExists) {
-                console.log(`⚠️ ${collection.name} (${collection.address}) not found by Alchemy, trying manual fetch...`);
-                
-                try {
-                    const alchemySDK = initializeAlchemySDK(collection.network);
-                    
-                    // Try to get NFTs for this specific contract
-                    const nftsResponse = await alchemySDK.nft.getNftsForOwner(account, {
-                        contractAddresses: [collection.address],
-                        withMetadata: true
-                    });
-
-                    if (nftsResponse.ownedNfts && nftsResponse.ownedNfts.length > 0) {
-                        console.log(`✅ Found ${nftsResponse.ownedNfts.length} NFTs for ${collection.name} via manual fetch!`);
-                        
-                        // Add the missing NFTs to our collection
-                        nftsResponse.ownedNfts.forEach(nft => {
-                            nft.network = collection.network;
-                            nft.networkDisplayName = collection.network === 'ethereum' ? 'Ethereum' : 'ApeChain';
-                            allNfts.push(nft);
-                        });
-
-                        // Add to collection map
-                        collectionMap[collection.address.toLowerCase()] = {
-                            contract: {
-                                address: collection.address,
-                                name: collection.name
-                            },
-                            name: collection.name,
-                            network: collection.network,
-                            networkDisplayName: collection.network === 'ethereum' ? 'Ethereum' : 'ApeChain',
-                            nfts: nftsResponse.ownedNfts,
-                            collectionSlug: null
-                        };
-                    } else {
-                        console.log(`ℹ️ No NFTs found for ${collection.name} (this is normal if you don't own any)`);
-                    }
-                } catch (error) {
-                    console.warn(`❌ Failed to manually fetch ${collection.name}:`, error.message);
-                }
-            } else {
-                console.log(`✅ ${collection.name} already found by Alchemy (${collectionExists.nfts.length} NFTs)`);
-            }
-        }
-    };
 
     const fetchFloorPrices = async (collectionMap) => {
         console.log('\n=== 🏷️ Starting Floor Price Fetching (Magic Eden API) ===');
@@ -954,17 +962,7 @@ function WalletAnalyzer({ account }) {
             const collectionName = collectionData.name || 'Unknown Collection';
             const network = collectionData.network || 'ethereum'; // Default to ethereum if no network specified
             
-            // Special logging for the specific collections you're looking for
-            const isAlloPass = contractAddress.toLowerCase() === '0x88f1A6D167531adC34aB24c6B22A9E99bbd77E3F'.toLowerCase();
-            const isGsOnApe = contractAddress.toLowerCase() === '0xb3443b6bd585ba4118cae2bedb61c7ec4a8281df'.toLowerCase();
-            
-            if (isAlloPass) {
-                console.log(`🎯 FOUND ALLOPASS! Fetching floor price for ${collectionName} on ${network} (${contractAddress})`);
-            } else if (isGsOnApe) {
-                console.log(`🎯 FOUND G'S ON APE! Fetching floor price for ${collectionName} on ${network} (${contractAddress})`);
-            } else {
-                console.log(`🔍 Fetching floor price for ${collectionName} on ${network} (${contractAddress.slice(0, 8)}...)`);
-            }
+            console.log(`🔍 Fetching floor price for ${collectionName} on ${network} (${contractAddress.slice(0, 8)}...)`)
             
             try {
                 // Rate limiting before each request
@@ -1281,11 +1279,42 @@ function WalletAnalyzer({ account }) {
         setTotalTokenValueUSD(currentTotal => {
             if (Math.abs(currentTotal - newPortfolioTotal) > 0.01) {
                 console.log(`💎 Portfolio Total Updated: $${newPortfolioTotal.toFixed(2)} (base: $${baseTotal.toFixed(2)} + staked: $${stakedAPEValue.toFixed(2)} + NFTs: $${totalNftValueUSD.toFixed(2)})`);
+                
+                // Insert portfolio snapshot into Supabase (non-blocking)
+                if (account && newPortfolioTotal > 0) {
+                    // Use setTimeout to make this completely non-blocking
+                    setTimeout(async () => {
+                        try {
+                            await insertPortfolioSnapshot(account, {
+                                totalValue: newPortfolioTotal,
+                                tokenBalance: baseTotal - stakedAPEValue - totalNftValueUSD,
+                                nativeBalance: Object.entries(networkTotals).reduce((sum, [network, total]) => {
+                                    // Estimate native balance portion
+                                    const nativePrice = tokenPrices[`${network}-native`] || 0;
+                                    const nativeBalance = network === 'ethereum' ? nativeBalances.ethereum : 
+                                                        network === 'apechain' ? nativeBalances.apechain :
+                                                        network === 'bnb' ? nativeBalances.bnb :
+                                                        network === 'solana' ? nativeBalances.solana : 0;
+                                    return sum + (nativeBalance * nativePrice);
+                                }, 0),
+                                nftValue: totalNftValueUSD,
+                                stakedValue: stakedAPEValue,
+                                profitLoss: analysis?.netProfit || 0,
+                                stakingRewards: analysis?.totalStakingRewards || 0,
+                                churchRewards: analysis?.totalApeChurchRewards || 0,
+                                raffleRewards: analysis?.totalRaffleRewards || 0
+                            });
+                        } catch (error) {
+                            console.warn('📊 Portfolio snapshot save failed (non-critical):', error.message);
+                        }
+                    }, 100);
+                }
+                
                 return newPortfolioTotal;
             }
             return currentTotal;
         });
-    }, [stakedAPEAmount, tokenPrices, networkTotals, totalNftValueUSD]);
+    }, [stakedAPEAmount, tokenPrices, networkTotals, totalNftValueUSD, account, analysis, nativeBalances]);
 
     // Recalculate NFT portfolio value when NFT data, floor prices, or ETH price changes
     useEffect(() => {
@@ -1454,7 +1483,7 @@ function WalletAnalyzer({ account }) {
             try {
                 console.log(`Fetching ${action} (attempt ${attempt}/${maxRetries})...`);
                 
-                const url = `${BASE_URL}?module=account&action=${action}&address=${account}&startblock=0&endblock=99999999&sort=asc&apikey=${API_KEY}`;
+                const url = `${BASE_URL}&module=account&action=${action}&address=${account}&startblock=0&endblock=99999999&sort=asc&apikey=${API_KEY}`;
                 console.log(`Request URL: ${url}`);
                 
                 const response = await axios.get(url, {
@@ -1646,8 +1675,8 @@ function WalletAnalyzer({ account }) {
         console.log('=== PROCESSING WALLET DATA WITH VALIDATION ===');
         
         // API constants
-        const BASE_URL = 'https://api.apescan.io/api';
-        const API_KEY = process.env.REACT_APP_APESCAN_API_KEY || '8AIZVW9PAGT3UY6FCGRZFDJ51SZGDIG13X';
+        const BASE_URL = 'https://api.etherscan.io/v2/api?chainid=33139';
+        const API_KEY = process.env.REACT_APP_ETHERSCAN_API_KEY || '9ETRRM36MW3RVS1WQ58US3HFWAPEB4KCX1';
         const ZERO_ADDRESS = '0x0000000000000000000000000000000000000000';
         
         // Staking contract constant
@@ -2099,7 +2128,7 @@ function WalletAnalyzer({ account }) {
                             // Add delay to respect 2 req/sec rate limit
                             await new Promise(resolve => setTimeout(resolve, 1000));
                             
-                            const receiptUrl = `${BASE_URL}?module=proxy&action=eth_getTransactionReceipt&txhash=${internal.hash}&apikey=${API_KEY}`;
+                            const receiptUrl = `${BASE_URL}&module=proxy&action=eth_getTransactionReceipt&txhash=${internal.hash}&apikey=${API_KEY}`;
                             const receiptResponse = await axios.get(receiptUrl, { timeout: 60000 });
                             
                             console.log(`🔍 Receipt response for ${internal.hash}:`, receiptResponse.data);
@@ -3395,8 +3424,8 @@ function WalletAnalyzer({ account }) {
 
     const fetchStakingRewards = async () => {
         // API constants
-        const BASE_URL = 'https://api.apescan.io/api';
-        const API_KEY = process.env.REACT_APP_APESCAN_API_KEY || '8AIZVW9PAGT3UY6FCGRZFDJ51SZGDIG13X';
+        const BASE_URL = 'https://api.etherscan.io/v2/api?chainid=33139';
+        const API_KEY = process.env.REACT_APP_ETHERSCAN_API_KEY || '9ETRRM36MW3RVS1WQ58US3HFWAPEB4KCX1';
         
         const APECHURCH_CONTRACT = '0xD2A5c5F58BDBeD24EF919d9dfb312ca84E7B31dD';
         const ALLORAFFLE_CONTRACT = '0xCC558007E5BBb341fb236f52d3Ba5A0D55718F65';
@@ -3407,7 +3436,7 @@ function WalletAnalyzer({ account }) {
             console.log('🔍 Fetching staking rewards from internal transactions...');
             
             // Fetch internal transactions specifically for staking detection
-            const internalStakingUrl = `${BASE_URL}?module=account&action=txlistinternal&address=${account}&startblock=0&endblock=99999999&sort=desc&apikey=${API_KEY}`;
+            const internalStakingUrl = `${BASE_URL}&module=account&action=txlistinternal&address=${account}&startblock=0&endblock=99999999&sort=desc&apikey=${API_KEY}`;
             const response = await axios.get(internalStakingUrl, { timeout: 30000 });
             
             if (response.data.status === '1' && Array.isArray(response.data.result)) {
@@ -3442,7 +3471,7 @@ function WalletAnalyzer({ account }) {
                                     // Add delay to respect 2 req/sec rate limit
                                     await new Promise(resolve => setTimeout(resolve, 1000));
                                     
-                                    const receiptUrl = `${BASE_URL}?module=proxy&action=eth_getTransactionReceipt&txhash=${tx.hash}&apikey=${API_KEY}`;
+                                    const receiptUrl = `${BASE_URL}&module=proxy&action=eth_getTransactionReceipt&txhash=${tx.hash}&apikey=${API_KEY}`;
                                     const receiptResponse = await axios.get(receiptUrl, { timeout: 60000 });
                                     
                                     console.log(`🔍 Receipt response for ${tx.hash}:`, receiptResponse.data);
@@ -4271,18 +4300,6 @@ function WalletAnalyzer({ account }) {
                                             
                                             if (!acc[contractAddress]) {
                                                 const floorPriceData = nftFloorPrices[contractAddress.toLowerCase()];
-                                                
-                                                // Debug specific collections
-                                                const isGsOnApe = contractAddress.toLowerCase() === '0xb3443b6bd585ba4118cae2bedb61c7ec4a8281df';
-                                                const isAlloPass = contractAddress.toLowerCase() === '0x88f1A6D167531adC34aB24c6B22A9E99bbd77E3F'.toLowerCase();
-                                                
-                                                if (isGsOnApe || isAlloPass) {
-                                                    console.log(`🔍 TABLE DEBUG - ${nft.contract.name}:`);
-                                                    console.log(`   Contract: ${contractAddress}`);
-                                                    console.log(`   Lowercase: ${contractAddress.toLowerCase()}`);
-                                                    console.log(`   Floor price found:`, floorPriceData);
-                                                    console.log(`   Available floor prices:`, Object.keys(nftFloorPrices));
-                                                }
                                                 
                                                 acc[contractAddress] = {
                                                     collection: nft.contract,
