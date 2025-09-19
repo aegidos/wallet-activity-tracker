@@ -1,6 +1,9 @@
 [build]
-  publish = "dist"
   command = "npm run build"
+  publish = "dist"
+  
+[build.environment]
+  SECRETS_SCAN_OMIT_KEYS = "NEXT_PUBLIC_ALCHEMY_API_KEY,REACT_APP_ETHERSCAN_API_KEY,REACT_APP_SUPABASE_ANON_KEY,REACT_APP_SUPABASE_URL"
 
 [[redirects]]
   from = "/*"
