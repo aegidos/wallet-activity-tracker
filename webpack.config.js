@@ -40,11 +40,11 @@ module.exports = (env, argv) => {
       new webpack.DefinePlugin({
         'process.env': JSON.stringify({
           NODE_ENV: isProduction ? 'production' : 'development',
-          NEXT_PUBLIC_ALCHEMY_API_KEY: process.env.NEXT_PUBLIC_ALCHEMY_API_KEY || 'Lx58kkNIJtKmG_mSohRWLvxzxJj_iNW-',
+          NEXT_PUBLIC_ALCHEMY_API_KEY: process.env.NEXT_PUBLIC_ALCHEMY_API_KEY,
           REACT_APP_SUPABASE_URL: process.env.REACT_APP_SUPABASE_URL,
           REACT_APP_SUPABASE_ANON_KEY: process.env.REACT_APP_SUPABASE_ANON_KEY,
           REACT_APP_APESCAN_API_KEY: process.env.REACT_APP_APESCAN_API_KEY,
-          REACT_APP_ETHERSCAN_API_KEY: process.env.REACT_APP_ETHERSCAN_API_KEY || '9ETRRM36MW3RVS1WQ58US3HFWAPEB4KCX1'
+          REACT_APP_ETHERSCAN_API_KEY: process.env.REACT_APP_ETHERSCAN_API_KEY
         })
       })
     ],

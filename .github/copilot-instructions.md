@@ -76,8 +76,11 @@ npm start          # Same as dev but with --open flag
 
 ### Key Environment Variables
 ```bash
-REACT_APP_APESCAN_API_KEY=8AIZVW9PAGT3UY6FCGRZFDJ51SZGDIG13X  # ApeChain explorer
-NEXT_PUBLIC_ALCHEMY_API_KEY=Lx58kkNIJtKmG_mSohRWLvxzxJj_iNW-   # Multi-chain data
+REACT_APP_APESCAN_API_KEY=your_apescan_api_key_here  # ApeChain explorer
+NEXT_PUBLIC_ALCHEMY_API_KEY=your_alchemy_api_key_here   # Multi-chain data
+REACT_APP_ETHERSCAN_API_KEY=your_etherscan_api_key_here  # Etherscan v2 API
+REACT_APP_SUPABASE_URL=your_supabase_url_here  # Supabase database URL
+REACT_APP_SUPABASE_ANON_KEY=your_supabase_anon_key_here  # Supabase anonymous key
 ```
 
 ### Python Data Processing

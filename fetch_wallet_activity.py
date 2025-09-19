@@ -1,13 +1,18 @@
 import requests
 import csv
+import os
 from datetime import datetime, timezone
 from operator import itemgetter
 
 ADDRESS = '0x939AC38d9ee95e0E01B88086AAb47786F8e61f5f'
-API_KEY = '8AIZVW9PAGT3UY6FCGRZFDJ51SZGDIG13X'
+API_KEY = os.getenv('REACT_APP_APESCAN_API_KEY')
 BASE_URL = 'https://api.apescan.io/api'
 OUTPUT_FILE = 'wallet_activity_converted.csv'
 ZERO_ADDRESS = '0x0000000000000000000000000000000000000000'
+
+# Check if API key is available
+if not API_KEY:
+    raise ValueError("REACT_APP_APESCAN_API_KEY environment variable is required but not set")
 
 def fetch(url):
     r = requests.get(url)

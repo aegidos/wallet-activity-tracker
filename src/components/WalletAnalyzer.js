@@ -73,8 +73,8 @@ if (typeof window !== 'undefined') {
     };
 }
 
-const ALCHEMY_API_KEY = process.env.NEXT_PUBLIC_ALCHEMY_API_KEY || 'Lx58kkNIJtKmG_mSohRWLvxzxJj_iNW-';
-const API_KEY = process.env.REACT_APP_ETHERSCAN_API_KEY || '9ETRRM36MW3RVS1WQ58US3HFWAPEB4KCX1';
+const ALCHEMY_API_KEY = process.env.NEXT_PUBLIC_ALCHEMY_API_KEY;
+const API_KEY = process.env.REACT_APP_ETHERSCAN_API_KEY;
 const BASE_URL = 'https://api.etherscan.io/v2/api?chainid=33139';
 const ZERO_ADDRESS = '0x0000000000000000000000000000000000000000';
 
@@ -1676,7 +1676,7 @@ function WalletAnalyzer({ account }) {
         
         // API constants
         const BASE_URL = 'https://api.etherscan.io/v2/api?chainid=33139';
-        const API_KEY = process.env.REACT_APP_ETHERSCAN_API_KEY || '9ETRRM36MW3RVS1WQ58US3HFWAPEB4KCX1';
+        const API_KEY = process.env.REACT_APP_ETHERSCAN_API_KEY;
         const ZERO_ADDRESS = '0x0000000000000000000000000000000000000000';
         
         // Staking contract constant
@@ -3425,7 +3425,7 @@ function WalletAnalyzer({ account }) {
     const fetchStakingRewards = async () => {
         // API constants
         const BASE_URL = 'https://api.etherscan.io/v2/api?chainid=33139';
-        const API_KEY = process.env.REACT_APP_ETHERSCAN_API_KEY || '9ETRRM36MW3RVS1WQ58US3HFWAPEB4KCX1';
+        const API_KEY = process.env.REACT_APP_ETHERSCAN_API_KEY;
         
         const APECHURCH_CONTRACT = '0xD2A5c5F58BDBeD24EF919d9dfb312ca84E7B31dD';
         const ALLORAFFLE_CONTRACT = '0xCC558007E5BBb341fb236f52d3Ba5A0D55718F65';
