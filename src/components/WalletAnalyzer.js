@@ -3,7 +3,7 @@ import axios from 'axios';
 import { format } from 'date-fns';
 import { ScatterChart, Scatter, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell } from 'recharts';
 import { Alchemy, Network } from 'alchemy-sdk';
-import { insertPortfolioSnapshot } from '../utils/supabase';
+import { insertPortfolioSnapshot, insertNftCollections } from '../utils/supabase';
 
 // APE Staking Contract Addressf
 const STAKING_CONTRACT = '0x4Ba2396086d52cA68a37D9C0FA364286e9c7835a';
@@ -72,6 +72,7 @@ if (typeof window !== 'undefined') {
         originalConsoleError.apply(console, args);
     };
 }
+//For debugging reasons we set API Keys to a static if its started locally
 
 const ALCHEMY_API_KEY = process.env.NEXT_PUBLIC_ALCHEMY_API_KEY;
 const API_KEY = process.env.REACT_APP_ETHERSCAN_API_KEY;
@@ -1271,8 +1272,8 @@ function WalletAnalyzer({ account }) {
         };
     }, []);
 
-    // Recalculate portfolio total when staked APE amount or NFT value changes
-    useEffect(() => {
+    // Calculate and update portfolio total only once after all data is loaded
+    const calculateAndUpdatePortfolioTotal = React.useCallback(() => {
         const apePrice = tokenPrices['apechain-native'] || 0;
         const stakedAPEValue = stakedAPEAmount * apePrice;
         
@@ -1280,44 +1281,40 @@ function WalletAnalyzer({ account }) {
         const baseTotal = Object.values(networkTotals).reduce((sum, val) => sum + (val || 0), 0);
         const newPortfolioTotal = baseTotal + stakedAPEValue + totalNftValueUSD;
         
-        setTotalTokenValueUSD(currentTotal => {
-            if (Math.abs(currentTotal - newPortfolioTotal) > 0.01) {
-                console.log(`💎 Portfolio Total Updated: $${newPortfolioTotal.toFixed(2)} (base: $${baseTotal.toFixed(2)} + staked: $${stakedAPEValue.toFixed(2)} + NFTs: $${totalNftValueUSD.toFixed(2)})`);
-                
-                // Insert portfolio snapshot into Supabase (non-blocking)
-                if (account && newPortfolioTotal > 0) {
-                    // Use setTimeout to make this completely non-blocking
-                    setTimeout(async () => {
-                        try {
-                            await insertPortfolioSnapshot(account, {
-                                totalValue: newPortfolioTotal,
-                                tokenBalance: baseTotal - stakedAPEValue - totalNftValueUSD,
-                                nativeBalance: Object.entries(networkTotals).reduce((sum, [network, total]) => {
-                                    // Estimate native balance portion
-                                    const nativePrice = tokenPrices[`${network}-native`] || 0;
-                                    const nativeBalance = network === 'ethereum' ? nativeBalances.ethereum : 
-                                                        network === 'apechain' ? nativeBalances.apechain :
-                                                        network === 'bnb' ? nativeBalances.bnb :
-                                                        network === 'solana' ? nativeBalances.solana : 0;
-                                    return sum + (nativeBalance * nativePrice);
-                                }, 0),
-                                nftValue: totalNftValueUSD,
-                                stakedValue: stakedAPEValue,
-                                profitLoss: analysis?.netProfit || 0,
-                                stakingRewards: analysis?.totalStakingRewards || 0,
-                                churchRewards: analysis?.totalApeChurchRewards || 0,
-                                raffleRewards: analysis?.totalRaffleRewards || 0
-                            });
-                        } catch (error) {
-                            console.warn('📊 Portfolio snapshot save failed (non-critical):', error.message);
-                        }
-                    }, 100);
-                }
-                
-                return newPortfolioTotal;
+        if (newPortfolioTotal > 0) {
+            console.log(`💎 Portfolio Total Updated: $${newPortfolioTotal.toFixed(2)} (base: $${baseTotal.toFixed(2)} + staked: $${stakedAPEValue.toFixed(2)} + NFTs: $${totalNftValueUSD.toFixed(2)})`);
+            
+            setTotalTokenValueUSD(newPortfolioTotal);
+            
+            // Insert portfolio snapshot into Supabase (non-blocking)
+            if (account) {
+                setTimeout(async () => {
+                    try {
+                        await insertPortfolioSnapshot(account, {
+                            totalValue: newPortfolioTotal,
+                            tokenBalance: baseTotal - stakedAPEValue - totalNftValueUSD,
+                            nativeBalance: Object.entries(networkTotals).reduce((sum, [network, total]) => {
+                                // Estimate native balance portion
+                                const nativePrice = tokenPrices[`${network}-native`] || 0;
+                                const nativeBalance = network === 'ethereum' ? nativeBalances.ethereum : 
+                                                    network === 'apechain' ? nativeBalances.apechain :
+                                                    network === 'bnb' ? nativeBalances.bnb :
+                                                    network === 'solana' ? nativeBalances.solana : 0;
+                                return sum + (nativeBalance * nativePrice);
+                            }, 0),
+                            nftValue: totalNftValueUSD,
+                            stakedValue: stakedAPEValue,
+                            profitLoss: analysis?.netProfit || 0,
+                            stakingRewards: analysis?.totalStakingRewards || 0,
+                            churchRewards: analysis?.totalApeChurchRewards || 0,
+                            raffleRewards: analysis?.totalRaffleRewards || 0
+                        });
+                    } catch (error) {
+                        console.warn('📊 Portfolio snapshot save failed (non-critical):', error.message);
+                    }
+                }, 100);
             }
-            return currentTotal;
-        });
+        }
     }, [stakedAPEAmount, tokenPrices, networkTotals, totalNftValueUSD, account, analysis, nativeBalances]);
 
     // Recalculate NFT portfolio value when NFT data, floor prices, or ETH price changes
@@ -1343,6 +1340,42 @@ function WalletAnalyzer({ account }) {
             return () => window.removeEventListener('resize', handleResize);
         }
     }, []);
+
+    // Insert NFT collections and calculate final portfolio total after all data is loaded
+    useEffect(() => {
+        const insertCollectionsAndCalculateTotal = async () => {
+            // Check if all data is loaded and we have sufficient data
+            if (tokenDataLoaded && !fetchingFloorPrices && 
+                Object.keys(networkTotals).some(key => networkTotals[key] > 0)) {
+                
+                // First, calculate and update the portfolio total
+                console.log('💎 Calculating final portfolio total...');
+                calculateAndUpdatePortfolioTotal();
+                
+                // Then insert NFT collections if we have NFTs
+                if (nftPortfolio.length > 0) {
+                    console.log('📝 All data loaded - inserting NFT collections into Supabase...');
+                    
+                    try {
+                        const result = await insertNftCollections(nftPortfolio);
+                        if (result.success) {
+                            console.log(`✅ NFT collections processed: ${result.insertedCount || 0} new records`);
+                        } else {
+                            console.warn('⚠️ NFT collections insert failed:', result.error);
+                        }
+                    } catch (error) {
+                        console.error('❌ Error inserting NFT collections:', error);
+                    }
+                } else {
+                    console.log('📝 No NFTs found - skipping collections insert');
+                }
+            }
+        };
+
+        // Add a small delay to ensure all state updates are complete
+        const timeoutId = setTimeout(insertCollectionsAndCalculateTotal, 1000);
+        return () => clearTimeout(timeoutId);
+    }, [tokenDataLoaded, fetchingFloorPrices, nftPortfolio, networkTotals, calculateAndUpdatePortfolioTotal]);
 
     // Calculate total directly from token balances and native balances (no complex state management)
     const calculateTotalPortfolioValue = () => {

@@ -1,6 +1,8 @@
 import { createClient } from '@supabase/supabase-js';
 
 // Use React environment variables (they should be REACT_APP_ prefixed)
+
+
 const supabaseUrl = process.env.REACT_APP_SUPABASE_URL;
 const supabaseAnonKey = process.env.REACT_APP_SUPABASE_ANON_KEY;
 
@@ -84,6 +86,101 @@ export const insertPortfolioSnapshot = async (walletAddress, portfolioData) => {
 
     } catch (err) {
         console.error('❌ Unexpected error inserting portfolio data:', err);
+        return { success: false, error: err };
+    }
+};
+
+// Function to insert NFT collection contract addresses
+// Expected Supabase table: nft_collections
+// Columns: collection_name (text), contract_address (text), 
+//          first_seen_timestamp (timestamptz), created_at (timestamptz)
+// Unique constraint on: (contract_address)
+export const insertNftCollections = async (nftPortfolio) => {
+    if (!supabase) {
+        console.warn('⚠️ Supabase not initialized - skipping NFT collections insert');
+        return { success: false, error: 'Supabase client not available' };
+    }
+
+    if (!nftPortfolio || nftPortfolio.length === 0) {
+        console.log('📝 No NFT collections to insert');
+        return { success: true, data: [] };
+    }
+
+    try {
+        // Extract unique collections from NFT portfolio
+        // NFT objects have structure: { contract: { address, name }, ... }
+        const uniqueCollections = new Map();
+        
+        console.log(`📝 Processing ${nftPortfolio.length} NFTs for collection extraction...`);
+        
+        nftPortfolio.forEach((nft, index) => {
+            // Debug first few NFTs to understand structure
+            if (index < 3) {
+                console.log(`🔍 NFT ${index + 1} structure:`, {
+                    hasContract: !!nft.contract,
+                    contractAddress: nft.contract?.address,
+                    contractName: nft.contract?.name,
+                    title: nft.title,
+                    collection: nft.collection
+                });
+            }
+            
+            const contractAddress = nft.contract?.address?.toLowerCase();
+            if (contractAddress && !uniqueCollections.has(contractAddress)) {
+                // Try multiple possible sources for collection name
+                const collectionName = nft.contract?.name || 
+                                     nft.collection?.name || 
+                                     nft.collection || 
+                                     nft.title || 
+                                     'Unknown Collection';
+                
+                // Extract network information from NFT object
+                const network = nft.network || nft.networkDisplayName?.toLowerCase() || 'ethereum';
+                
+                uniqueCollections.set(contractAddress, {
+                    collection_name: collectionName,
+                    contract_address: contractAddress,
+                    network: network,
+                    first_seen_timestamp: new Date().toISOString()
+                });
+                
+                console.log(`📋 Found collection: ${collectionName} on ${network} (${contractAddress.slice(0, 8)}...)`);
+            }
+        });
+
+        const insertData = Array.from(uniqueCollections.values());
+        
+        if (insertData.length === 0) {
+            console.log('📝 No valid NFT collections to insert');
+            return { success: true, data: [] };
+        }
+
+        console.log(`📝 Attempting to insert ${insertData.length} unique NFT collections:`);
+        insertData.forEach(collection => {
+            console.log(`  - ${collection.collection_name} (${collection.contract_address.slice(0, 8)}...)`);
+        });
+
+        // Use upsert to handle conflicts (insert only if not exists)
+        const { data, error } = await supabase
+            .from('nft_collections')
+            .upsert(insertData, { 
+                onConflict: 'contract_address',
+                ignoreDuplicates: true 
+            })
+            .select();
+
+        if (error) {
+            console.error('❌ Supabase NFT collections insert error:', error);
+            return { success: false, error };
+        }
+
+        const insertedCount = data?.length || 0;
+        console.log(`✅ NFT collections processed: ${insertedCount} new records inserted/updated`);
+        
+        return { success: true, data, insertedCount };
+
+    } catch (err) {
+        console.error('❌ Unexpected error inserting NFT collections:', err);
         return { success: false, error: err };
     }
 };
