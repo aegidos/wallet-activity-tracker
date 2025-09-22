@@ -146,7 +146,7 @@ async function requestAccounts() {
     }
 }
 
-function WalletAnalyzer({ account }) {
+function WalletAnalyzer({ account, connectedAccount, onDisconnect, onClearAnalysis }) {
     const [transactions, setTransactions] = useState([]);
     const [analysis, setAnalysis] = useState(null);
     const [loading, setLoading] = useState(false);
@@ -190,6 +190,7 @@ function WalletAnalyzer({ account }) {
     const [raffleRewards, setRaffleRewards] = useState([]);
     const [fetchingFloorPrices, setFetchingFloorPrices] = useState(false);
     const [tokenDataLoaded, setTokenDataLoaded] = useState(false);
+    const [processingComplete, setProcessingComplete] = useState(false);
 
     // Navigation state for header menu
     const [activeTab, setActiveTab] = useState('Portfolio');
@@ -1694,6 +1695,7 @@ function WalletAnalyzer({ account }) {
     const fetchWalletData = async () => {
         setLoading(true);
         setError(null);
+        setProcessingComplete(false); // Reset processing state
         
         // Reset state to prevent duplicate accumulation during re-analysis
         setTransactions([]);
@@ -2841,6 +2843,9 @@ function WalletAnalyzer({ account }) {
             apeStakingTransactions: transactions.filter(t => t.label === 'APE Staked').length
         });
         
+        // Mark processing as complete
+        setProcessingComplete(true);
+        
         return transactions;
     };
 
@@ -3730,33 +3735,9 @@ function WalletAnalyzer({ account }) {
 
     // Remove the parallel fetchAllData function - use only sequential fetchWalletData
 
-    if (loading) {
-        return (
-            <div className="analysis-section">
-                <div className="loading">
-                    <div>Analyzing wallet activity...</div>
-                    <div>This may take a few moments for wallets with many transactions</div>
-                </div>
-            </div>
-        );
-    }
-
-    if (error) {
-        return (
-            <div className="analysis-section">
-                <div className="error">
-                    ⚠️ {error}
-                    <button 
-                        className="connect-btn" 
-                        onClick={fetchWalletData}
-                        style={{marginLeft: '15px', padding: '8px 16px', fontSize: '14px'}}
-                    >
-                        Retry
-                    </button>
-                </div>
-            </div>
-        );
-    }
+    // Show loading or error state as content instead of replacing entire component
+    const showLoadingContent = loading && !analysis;
+    const showErrorContent = error && !analysis;
 
     // Token Balances Display Component with USD values
     const TokenBalanceDisplay = ({ networkBalances, networkName, onTotalCalculated }) => {
@@ -4012,7 +3993,7 @@ function WalletAnalyzer({ account }) {
 
     return (
         <div>
-            {/* Header Navigation Menu - Absolute Top Sticky */}
+            {/* Simple Header with Wallet Address and Status */}
             <div style={{
                 position: 'fixed',
                 top: '0',
@@ -4022,68 +4003,227 @@ function WalletAnalyzer({ account }) {
                 borderBottom: '2px solid rgba(31, 81, 255, 0.3)',
                 boxShadow: '0 4px 12px rgba(0, 0, 0, 0.5)',
                 zIndex: 10000,
-                padding: '1rem 0'
+                padding: '0.75rem 1rem'
             }}>
                 <div style={{
                     display: 'flex',
-                    justifyContent: 'center',
-                    gap: screenSize.isMobile ? '0.25rem' : screenSize.isTablet ? '0.75rem' : '2rem',
+                    justifyContent: 'space-between',
+                    alignItems: 'center',
                     maxWidth: '1200px',
                     margin: '0 auto',
-                    padding: screenSize.isMobile ? '0 0.25rem' : '0 0.5rem',
-                    flexWrap: 'nowrap',
-                    overflow: 'hidden'
+                    gap: '1rem'
                 }}>
-                    {['Portfolio', 'Tokens', 'NFTs', 'Transactions'].map((tab) => (
-                        <button
-                            key={tab}
-                            onClick={() => setActiveTab(tab)}
-                            style={{
-                                background: activeTab === tab ? 'linear-gradient(135deg, rgba(31, 81, 255, 0.8) 0%, rgba(31, 81, 255, 0.6) 100%)' : 'transparent',
-                                color: activeTab === tab ? '#FFFFFF' : '#e0e0e0',
-                                border: '1px solid',
-                                borderColor: activeTab === tab ? 'rgba(31, 81, 255, 0.3)' : 'rgba(255, 255, 255, 0.1)',
-                                padding: screenSize.isMobile ? '0.4rem 0.5rem' : screenSize.isTablet ? '0.6rem 0.8rem' : '0.75rem 1.5rem',
-                                borderRadius: screenSize.isMobile ? '8px' : '12px',
-                                cursor: 'pointer',
-                                fontSize: screenSize.isMobile ? '0.75rem' : screenSize.isTablet ? '0.85rem' : '1rem',
-                                fontWeight: activeTab === tab ? '600' : '500',
-                                transition: 'all 0.2s ease',
-                                minWidth: 'auto',
-                                boxShadow: activeTab === tab ? '0 0 10px rgba(31, 81, 255, 0.3)' : 'none',
-                                textShadow: activeTab === tab ? '0 0 8px rgba(31, 81, 255, 0.3)' : 'none',
-                                flex: screenSize.isMobile ? '1' : 'none',
-                                textAlign: 'center',
-                                whiteSpace: 'nowrap'
-                            }}
-                            onMouseEnter={(e) => {
-                                if (activeTab !== tab) {
-                                    e.target.style.borderColor = 'rgba(31, 81, 255, 0.5)';
-                                    e.target.style.color = '#4D7FFF';
-                                    e.target.style.backgroundColor = 'rgba(31, 81, 255, 0.1)';
-                                    e.target.style.textShadow = '0 0 8px rgba(31, 81, 255, 0.3)';
-                                }
-                            }}
-                            onMouseLeave={(e) => {
-                                if (activeTab !== tab) {
-                                    e.target.style.borderColor = 'rgba(255, 255, 255, 0.1)';
-                                    e.target.style.color = '#e0e0e0';
-                                    e.target.style.backgroundColor = 'transparent';
-                                    e.target.style.textShadow = 'none';
-                                }
-                            }}
-                        >
-                            {tab}
-                        </button>
-                    ))}
+                    {/* Left side: Wallet Address and Status */}
+                    <div style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '1rem',
+                        flex: '1'
+                    }}>
+                        {/* Wallet Address */}
+                        <div style={{
+                            color: '#e0e0e0',
+                            fontSize: screenSize.isMobile ? '0.7rem' : '0.85rem',
+                            fontFamily: 'monospace',
+                            background: 'rgba(255, 255, 255, 0.05)',
+                            padding: screenSize.isMobile ? '0.3rem 0.6rem' : '0.4rem 0.8rem',
+                            borderRadius: '8px',
+                            border: '1px solid rgba(255, 255, 255, 0.1)'
+                        }}>
+                            {account ? 
+                                `${account.slice(0, 6)}...${account.slice(-4)}` : 
+                                'No wallet connected'
+                            }
+                        </div>
+                        
+                        {/* Status/Loading Indicator */}
+                        <div style={{
+                            color: (loading || !processingComplete) ? '#f59e0b' : error ? '#ef4444' : '#10b981',
+                            fontSize: screenSize.isMobile ? '0.7rem' : '0.8rem',
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: '0.5rem'
+                        }}>
+                            {(loading || (!processingComplete && account && !error)) && (
+                                <>
+                                    <div style={{
+                                        width: '10px',
+                                        height: '10px',
+                                        border: '2px solid transparent',
+                                        borderTop: '2px solid #f59e0b',
+                                        borderRadius: '50%',
+                                        animation: 'spin 1s linear infinite'
+                                    }}></div>
+                                    {!screenSize.isMobile && 'Analyzing...'}
+                                </>
+                            )}
+                            {error && (
+                                <>
+                                    ⚠️ {!screenSize.isMobile && 'Error'}
+                                </>
+                            )}
+                            {!loading && !error && account && processingComplete && (
+                                <>
+                                    ✅ {!screenSize.isMobile && 'Ready'}
+                                </>
+                            )}
+                        </div>
+                    </div>
+                    
+                    {/* Right side: Action buttons */}
+                    <div style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: screenSize.isMobile ? '0.5rem' : '0.75rem'
+                    }}>
+                        {/* Disconnect button - only show if there's a connected wallet */}
+                        {connectedAccount && onDisconnect && (
+                            <button
+                                onClick={onDisconnect}
+                                style={{
+                                    background: 'rgba(239, 68, 68, 0.8)',
+                                    color: '#FFFFFF',
+                                    border: '1px solid rgba(239, 68, 68, 0.3)',
+                                    padding: screenSize.isMobile ? '0.4rem 0.6rem' : '0.5rem 0.8rem',
+                                    borderRadius: '8px',
+                                    cursor: 'pointer',
+                                    fontSize: screenSize.isMobile ? '0.7rem' : '0.8rem',
+                                    fontWeight: '500',
+                                    transition: 'all 0.2s ease',
+                                    whiteSpace: 'nowrap'
+                                }}
+                                onMouseEnter={(e) => {
+                                    e.target.style.background = 'rgba(239, 68, 68, 1)';
+                                }}
+                                onMouseLeave={(e) => {
+                                    e.target.style.background = 'rgba(239, 68, 68, 0.8)';
+                                }}
+                            >
+                                {screenSize.isMobile ? '🔌' : '🔌 Disconnect'}
+                            </button>
+                        )}
+                        
+                        {/* Clear Analysis button */}
+                        {onClearAnalysis && (
+                            <button
+                                onClick={onClearAnalysis}
+                                style={{
+                                    background: 'rgba(31, 81, 255, 0.8)',
+                                    color: '#FFFFFF',
+                                    border: '1px solid rgba(31, 81, 255, 0.3)',
+                                    padding: screenSize.isMobile ? '0.4rem 0.6rem' : '0.5rem 0.8rem',
+                                    borderRadius: '8px',
+                                    cursor: 'pointer',
+                                    fontSize: screenSize.isMobile ? '0.7rem' : '0.8rem',
+                                    fontWeight: '500',
+                                    transition: 'all 0.2s ease',
+                                    whiteSpace: 'nowrap'
+                                }}
+                                onMouseEnter={(e) => {
+                                    e.target.style.background = 'rgba(31, 81, 255, 1)';
+                                }}
+                                onMouseLeave={(e) => {
+                                    e.target.style.background = 'rgba(31, 81, 255, 0.8)';
+                                }}
+                            >
+                                {screenSize.isMobile ? '🔄' : '🔄 New Wallet'}
+                            </button>
+                        )}
+                    </div>
                 </div>
             </div>
 
-            {/* Main Content Wrapper - with padding for fixed header */}
+            {/* Main Content Wrapper - with padding for fixed header and footer */}
             <div style={{ 
-                paddingTop: '100px', // Adjust based on header height
+                paddingTop: '70px', // Reduced space for header with buttons
+                paddingBottom: '100px', // Space for footer navigation
                 minHeight: '100vh'
             }}>
+
+            {/* Loading Content */}
+            {showLoadingContent && (
+                <div style={{
+                    textAlign: 'center',
+                    padding: '60px 20px',
+                    color: '#e0e0e0'
+                }}>
+                    <div style={{
+                        fontSize: '1.2rem',
+                        marginBottom: '1rem',
+                        color: '#f59e0b'
+                    }}>
+                        Analyzing wallet activity...
+                    </div>
+                    <div style={{
+                        fontSize: '0.9rem',
+                        color: '#9ca3af'
+                    }}>
+                        This may take a few moments for wallets with many transactions
+                    </div>
+                </div>
+            )}
+
+            {/* Error Content */}
+            {showErrorContent && (
+                <div style={{
+                    textAlign: 'center',
+                    padding: '60px 20px',
+                    color: '#ef4444'
+                }}>
+                    <div style={{
+                        fontSize: '1.2rem',
+                        marginBottom: '1rem'
+                    }}>
+                        ⚠️ {error}
+                    </div>
+                    <button 
+                        onClick={fetchWalletData}
+                        style={{
+                            background: 'linear-gradient(135deg, rgba(31, 81, 255, 0.8) 0%, rgba(31, 81, 255, 0.6) 100%)',
+                            color: '#FFFFFF',
+                            border: '1px solid rgba(31, 81, 255, 0.3)',
+                            padding: '0.75rem 1.5rem',
+                            borderRadius: '12px',
+                            cursor: 'pointer',
+                            fontSize: '1rem',
+                            fontWeight: '500',
+                            transition: 'all 0.2s ease'
+                        }}
+                    >
+                        Retry Analysis
+                    </button>
+                </div>
+            )}
+
+            {/* Welcome message when no account is connected */}
+            {!account && !loading && !error && (
+                <div style={{
+                    textAlign: 'center',
+                    padding: '60px 20px',
+                    color: '#e0e0e0'
+                }}>
+                    <div style={{
+                        fontSize: '1.5rem',
+                        marginBottom: '1rem',
+                        color: '#1F51FF'
+                    }}>
+                        Welcome to Wallet Analyzer
+                    </div>
+                    <div style={{
+                        fontSize: '1rem',
+                        color: '#9ca3af',
+                        marginBottom: '2rem'
+                    }}>
+                        Connect your wallet or enter a wallet address to analyze portfolio and transactions
+                    </div>
+                    <div style={{
+                        fontSize: '0.9rem',
+                        color: '#6b7280'
+                    }}>
+                        Supports Ethereum, ApeChain, BNB Chain, and Solana networks
+                    </div>
+                </div>
+            )}
 
             {/* Portfolio Section */}
             {activeTab === 'Portfolio' && analysis && (
@@ -4893,6 +5033,73 @@ function WalletAnalyzer({ account }) {
             )}
 
             </div> {/* Close Main Content Wrapper */}
+            
+            {/* Footer Navigation Menu */}
+            <div style={{
+                position: 'fixed',
+                bottom: '0',
+                left: '0',
+                right: '0',
+                background: 'linear-gradient(135deg, #0a0a0a 0%, #1a1a2e 25%, #16213e 50%, #0f0f23 75%, #000000 100%)',
+                borderTop: '2px solid rgba(31, 81, 255, 0.3)',
+                boxShadow: '0 -4px 12px rgba(0, 0, 0, 0.5)',
+                zIndex: 10000,
+                padding: '1rem 0'
+            }}>
+                <div style={{
+                    display: 'flex',
+                    justifyContent: 'center',
+                    gap: screenSize.isMobile ? '0.25rem' : screenSize.isTablet ? '0.75rem' : '2rem',
+                    maxWidth: '1200px',
+                    margin: '0 auto',
+                    padding: screenSize.isMobile ? '0 0.25rem' : '0 0.5rem',
+                    flexWrap: 'nowrap',
+                    overflow: 'hidden'
+                }}>
+                    {['Portfolio', 'Tokens', 'NFTs', 'Transactions'].map((tab) => (
+                        <button
+                            key={tab}
+                            onClick={() => setActiveTab(tab)}
+                            style={{
+                                background: activeTab === tab ? 'linear-gradient(135deg, rgba(31, 81, 255, 0.8) 0%, rgba(31, 81, 255, 0.6) 100%)' : 'transparent',
+                                color: activeTab === tab ? '#FFFFFF' : '#e0e0e0',
+                                border: '1px solid',
+                                borderColor: activeTab === tab ? 'rgba(31, 81, 255, 0.3)' : 'rgba(255, 255, 255, 0.1)',
+                                padding: screenSize.isMobile ? '0.4rem 0.5rem' : screenSize.isTablet ? '0.6rem 0.8rem' : '0.75rem 1.5rem',
+                                borderRadius: screenSize.isMobile ? '8px' : '12px',
+                                cursor: 'pointer',
+                                fontSize: screenSize.isMobile ? '0.75rem' : screenSize.isTablet ? '0.85rem' : '1rem',
+                                fontWeight: activeTab === tab ? '600' : '500',
+                                transition: 'all 0.2s ease',
+                                minWidth: 'auto',
+                                boxShadow: activeTab === tab ? '0 0 10px rgba(31, 81, 255, 0.3)' : 'none',
+                                textShadow: activeTab === tab ? '0 0 8px rgba(31, 81, 255, 0.3)' : 'none',
+                                flex: screenSize.isMobile ? '1' : 'none',
+                                textAlign: 'center',
+                                whiteSpace: 'nowrap'
+                            }}
+                            onMouseEnter={(e) => {
+                                if (activeTab !== tab) {
+                                    e.target.style.borderColor = 'rgba(31, 81, 255, 0.5)';
+                                    e.target.style.color = '#4D7FFF';
+                                    e.target.style.backgroundColor = 'rgba(31, 81, 255, 0.1)';
+                                    e.target.style.textShadow = '0 0 8px rgba(31, 81, 255, 0.3)';
+                                }
+                            }}
+                            onMouseLeave={(e) => {
+                                if (activeTab !== tab) {
+                                    e.target.style.borderColor = 'rgba(255, 255, 255, 0.1)';
+                                    e.target.style.color = '#e0e0e0';
+                                    e.target.style.backgroundColor = 'transparent';
+                                    e.target.style.textShadow = 'none';
+                                }
+                            }}
+                        >
+                            {tab}
+                        </button>
+                    ))}
+                </div>
+            </div>
         </div>
     );
 }

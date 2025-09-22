@@ -234,9 +234,9 @@ function App() {
 
     return (
         <div className="container">
-            <div className="header">
-                <h1>ApeObserver</h1>
-                <p>Analyze wallet transactions and calculate NFT trading profit/loss on APE Chain</p>
+            <div className="header" style={{ marginBottom: '1rem' }}>
+                <h1 style={{ marginBottom: '0.5rem' }}>ApeObserver</h1>
+                <p style={{ margin: '0' }}>Analyze wallet transactions and calculate NFT trading profit/loss on APE Chain</p>
             </div>
 
             {!addressToAnalyze ? (
@@ -291,47 +291,12 @@ function App() {
                     )}
                 </div>
             ) : (
-                <div>
-                    <div className="wallet-info">
-                        <h3>Analyzing Wallet</h3>
-                        <p>
-                            <strong>Address:</strong> 
-                            <a 
-                                href={`https://apescan.io/address/${addressToAnalyze}`}
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                style={{color: '#3b82f6', textDecoration: 'none', marginLeft: '8px'}}
-                            >
-                                {addressToAnalyze ? `${addressToAnalyze.slice(0, 7)}...${addressToAnalyze.slice(-5)}` : addressToAnalyze}
-                            </a>
-                            {!account && new URLSearchParams(window.location.search).get('wallet') && (
-                                <span style={{
-                                    marginLeft: '12px',
-                                    fontSize: '12px',
-                                    color: '#10b981',
-                                    backgroundColor: 'rgba(16, 185, 129, 0.1)',
-                                    padding: '2px 8px',
-                                    borderRadius: '12px',
-                                    border: '1px solid rgba(16, 185, 129, 0.2)'
-                                }}>
-                                    🔗 Loaded from URL
-                                </span>
-                            )}
-                        </p>
-                        <div className="wallet-actions">
-                            {account && (
-                                <button className="disconnect-btn" onClick={disconnectWallet}>
-                                    🔌 Disconnect Wallet
-                                </button>
-                            )}
-                            <button className="clear-btn" onClick={clearAnalysis}>
-                                🔄 Analyze Different Wallet
-                            </button>
-                        </div>
-                    </div>
-
-                    <WalletAnalyzer account={addressToAnalyze} />
-                </div>
+                <WalletAnalyzer 
+                    account={addressToAnalyze} 
+                    connectedAccount={account}
+                    onDisconnect={disconnectWallet}
+                    onClearAnalysis={clearAnalysis}
+                />
             )}
         </div>
     );
