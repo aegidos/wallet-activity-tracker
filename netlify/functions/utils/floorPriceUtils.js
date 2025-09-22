@@ -12,7 +12,7 @@ const RATE_LIMIT_DELAY = 500; // 500ms = 2 requests per second (Magic Eden limit
  * @param {string} collectionName - Human readable collection name for logging
  * @returns {Object|null} Floor price data or null if failed
  */
-export const fetchCollectionFloorPrice = async (contractAddress, network = 'ethereum', collectionName = 'Unknown') => {
+const fetchCollectionFloorPrice = async (contractAddress, network = 'ethereum', collectionName = 'Unknown') => {
     try {
         // Determine the correct Magic Eden API endpoint based on network
         let apiEndpoint;
@@ -83,7 +83,7 @@ export const fetchCollectionFloorPrice = async (contractAddress, network = 'ethe
  * @param {Array} collections - Array of collection objects with {contract_address, collection_name, network}
  * @returns {Array} Array of successful floor price fetches
  */
-export const fetchMultipleFloorPrices = async (collections) => {
+const fetchMultipleFloorPrices = async (collections) => {
     console.log(`\n=== 🏷️ Starting Batch Floor Price Fetching ===`);
     console.log(`📊 Processing ${collections.length} collections...`);
     
@@ -129,7 +129,7 @@ export const fetchMultipleFloorPrices = async (collections) => {
  * Get current ETH price for USD conversion
  * @returns {number} ETH price in USD
  */
-export const getCurrentEthPrice = async () => {
+const getCurrentEthPrice = async () => {
     try {
         const response = await fetch('https://api.binance.com/api/v3/ticker/price?symbol=ETHUSDT');
         const data = await response.json();
@@ -145,7 +145,7 @@ export const getCurrentEthPrice = async () => {
  * @param {Array} floorPriceResults - Results from fetchMultipleFloorPrices
  * @returns {Array} Results with USD prices calculated
  */
-export const convertPricesToUSD = async (floorPriceResults) => {
+const convertPricesToUSD = async (floorPriceResults) => {
     const ethPrice = await getCurrentEthPrice();
     console.log(`💰 Using ETH price: $${ethPrice.toFixed(2)} for USD conversions`);
     
@@ -157,4 +157,11 @@ export const convertPricesToUSD = async (floorPriceResults) => {
         }
         return result;
     });
+};
+
+module.exports = {
+    fetchCollectionFloorPrice,
+    fetchMultipleFloorPrices,
+    getCurrentEthPrice,
+    convertPricesToUSD
 };

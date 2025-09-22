@@ -1,10 +1,11 @@
 // Netlify Scheduled Function - Update NFT Floor Prices
 // Runs every hour to fetch and update floor prices for all collections
 
-import { fetchMultipleFloorPrices, convertPricesToUSD } from './utils/floorPriceUtils.js';
-import { getAllNftCollections, updateFloorPrices, getStaleCollections, logExecutionStats } from './utils/supabaseUtils.js';
+const { schedule } = require('@netlify/functions');
+const { fetchMultipleFloorPrices, convertPricesToUSD } = require('./utils/floorPriceUtils');
+const { getAllNftCollections, updateFloorPrices, getStaleCollections, logExecutionStats } = require('./utils/supabaseUtils');
 
-export async function handler(event, context) {
+const handler = async (event, context) => {
     const startTime = Date.now();
     console.log('\n🚀 Starting Scheduled Floor Price Update');
     console.log(`⏰ Execution time: ${new Date().toISOString()}`);
@@ -113,6 +114,9 @@ export async function handler(event, context) {
         };
     }
 }
+
+// Export the scheduled handler
+exports.handler = schedule("0 * * * *", handler);
 
 // For local testing
 if (process.env.NODE_ENV === 'development') {

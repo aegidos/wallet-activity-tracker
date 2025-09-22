@@ -1,5 +1,5 @@
 // Supabase utilities for Netlify Functions
-import { createClient } from '@supabase/supabase-js';
+const { createClient } = require('@supabase/supabase-js');
 
 // Initialize Supabase client for server-side operations
 const supabaseUrl = process.env.REACT_APP_SUPABASE_URL || process.env.SUPABASE_URL;
@@ -15,7 +15,7 @@ const supabase = createClient(supabaseUrl, supabaseKey);
  * Get all NFT collections from the database
  * @returns {Array} Array of collection objects
  */
-export const getAllNftCollections = async () => {
+const getAllNftCollections = async () => {
     try {
         console.log('📊 Fetching all NFT collections from database...');
         
@@ -43,7 +43,7 @@ export const getAllNftCollections = async () => {
  * @param {Array} floorPriceData - Array of floor price objects
  * @returns {Object} Update results
  */
-export const updateFloorPrices = async (floorPriceData) => {
+const updateFloorPrices = async (floorPriceData) => {
     try {
         console.log(`💾 Updating floor prices for ${floorPriceData.length} collections...`);
         
@@ -95,7 +95,7 @@ export const updateFloorPrices = async (floorPriceData) => {
  * @param {number} hoursAgo - Consider collections stale if not updated in this many hours
  * @returns {Array} Array of stale collections
  */
-export const getStaleCollections = async (hoursAgo = 24) => {
+const getStaleCollections = async (hoursAgo = 24) => {
     try {
         const cutoffTime = new Date();
         cutoffTime.setHours(cutoffTime.getHours() - hoursAgo);
@@ -126,7 +126,7 @@ export const getStaleCollections = async (hoursAgo = 24) => {
  * Log execution statistics to help monitor the scheduled function
  * @param {Object} stats - Execution statistics
  */
-export const logExecutionStats = async (stats) => {
+const logExecutionStats = async (stats) => {
     try {
         console.log('\n📈 Execution Statistics:');
         console.log(`   🕒 Execution time: ${stats.executionTime}ms`);
@@ -142,4 +142,11 @@ export const logExecutionStats = async (stats) => {
     } catch (error) {
         console.warn('⚠️ Failed to log execution stats:', error);
     }
+};
+
+module.exports = {
+    getAllNftCollections,
+    updateFloorPrices,
+    getStaleCollections,
+    logExecutionStats
 };

@@ -5,10 +5,8 @@
 [build.environment]
   SECRETS_SCAN_OMIT_KEYS = "NEXT_PUBLIC_ALCHEMY_API_KEY,REACT_APP_ETHERSCAN_API_KEY,REACT_APP_SUPABASE_ANON_KEY,REACT_APP_SUPABASE_URL"
 
-# Scheduled Functions - NFT Floor Price Updates
-[[functions]]
-  name = "update-floor-prices"
-  schedule = "0 * * * *"  # Run every hour at minute 0
+[functions]
+  directory = "netlify/functions"
 
 [[redirects]]
   from = "/*"
