@@ -3837,8 +3837,8 @@ function WalletAnalyzer({ account }) {
                             <th>Logo</th>
                             <th>Symbol</th>
                             <th>Balance</th>
-                            <th>Price USD</th>
-                            <th>Balance USD</th>
+                            <th>Price</th>
+                            <th>USD</th>
                         </tr>
                     </thead>
                     <tbody>
@@ -3967,7 +3967,11 @@ function WalletAnalyzer({ account }) {
                                                 {token.symbol || 'N/A'}
                                             </td>
                                             <td style={token.isNative ? { fontWeight: '600' } : {}}>
-                                                {balance.toFixed(token.isNative ? 6 : 4)}
+                                                {(() => {
+                                                    const formattedBalance = balance.toFixed(token.isNative ? 6 : 4);
+                                                    // Remove trailing zeros and decimal point if not needed
+                                                    return formattedBalance.replace(/\.?0+$/, '');
+                                                })()}
                                             </td>
                                             <td style={{ 
                                                 color: price > 0 ? '#10b981' : '#6b7280',
