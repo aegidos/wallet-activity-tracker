@@ -74,7 +74,7 @@ if (typeof window !== 'undefined') {
 }
 //For debugging reasons we set API Keys to a static if its started locally
 
-const ALCHEMY_API_KEY = process.env.NEXT_PUBLIC_ALCHEMY_API_KEY ;
+const ALCHEMY_API_KEY = process.env.NEXT_PUBLIC_ALCHEMY_API_KEY;
 const API_KEY = process.env.REACT_APP_ETHERSCAN_API_KEY;
 const BASE_URL = 'https://api.etherscan.io/v2/api?chainid=33139';
 const ZERO_ADDRESS = '0x0000000000000000000000000000000000000000';
@@ -1331,18 +1331,32 @@ function WalletAnalyzer({ account }) {
         const baseTotal = Object.values(networkTotals).reduce((sum, val) => sum + (val || 0), 0);
         const newPortfolioTotal = baseTotal + stakedAPEValue + totalNftValueUSD;
         
+        // Check if we should save the portfolio snapshot
+        const hasNFTs = nftPortfolio.length > 0;
+        const hasNFTValue = totalNftValueUSD > 0;
+        const nftDataComplete = hasNFTs && hasNFTValue; // Either no NFTs, or NFTs with actual value
+        
         if (newPortfolioTotal > 0) {
             console.log(`💎 Portfolio Total Updated: $${newPortfolioTotal.toFixed(2)} (base: $${baseTotal.toFixed(2)} + staked: $${stakedAPEValue.toFixed(2)} + NFTs: $${totalNftValueUSD.toFixed(2)})`);
             
             setTotalTokenValueUSD(newPortfolioTotal);
             
+            // Only insert portfolio snapshot if NFT data is complete
+            // This prevents saving incomplete snapshots when NFTs exist but floor prices haven't been fetched yet
+            if (account && nftDataComplete) {
+                console.log(`📊 Saving portfolio snapshot (NFTs: ${hasNFTs ? `${nftPortfolio.length} with $${totalNftValueUSD.toFixed(2)} value` : 'none'})`);
+            } else if (account && !nftDataComplete) {
+                console.log(`⏳ Skipping portfolio snapshot - waiting for NFT floor prices to load (${nftPortfolio.length} NFTs with $0 value)`);
+                return; // Exit early, don't save incomplete data
+            }
+            
             // Insert portfolio snapshot into Supabase (non-blocking)
-            if (account) {
+            if (account && nftDataComplete) {
                 setTimeout(async () => {
                     try {
                         await insertPortfolioSnapshot(account, {
                             totalValue: newPortfolioTotal,
-                            tokenBalance: baseTotal - stakedAPEValue - totalNftValueUSD,
+                            tokenBalance: newPortfolioTotal - stakedAPEValue - totalNftValueUSD,
                             nativeBalance: Object.entries(networkTotals).reduce((sum, [network, total]) => {
                                 // Estimate native balance portion
                                 const nativePrice = tokenPrices[`${network}-native`] || 0;
@@ -1365,7 +1379,7 @@ function WalletAnalyzer({ account }) {
                 }, 100);
             }
         }
-    }, [stakedAPEAmount, tokenPrices, networkTotals, totalNftValueUSD, account, analysis, nativeBalances]);
+    }, [stakedAPEAmount, tokenPrices, networkTotals, totalNftValueUSD, account, analysis, nativeBalances, nftPortfolio]);
 
     // Recalculate NFT portfolio value when NFT data, floor prices, or ETH price changes
     useEffect(() => {
