@@ -184,3 +184,85 @@ export const insertNftCollections = async (nftPortfolio) => {
         return { success: false, error: err };
     }
 };
+
+/**
+ * Fetch cached floor prices from Supabase nft_collections table
+ * @param {Array} contractAddresses - Array of contract addresses to look up
+ * @returns {Object} Map of contract addresses to floor price data
+ */
+export const getCachedFloorPrices = async (contractAddresses) => {
+    if (!supabase) {
+        console.warn('⚠️ Supabase not initialized - cannot fetch cached floor prices');
+        return {};
+    }
+
+    if (!contractAddresses || contractAddresses.length === 0) {
+        console.warn('⚠️ No contract addresses provided for floor price lookup');
+        return {};
+    }
+
+    try {
+        console.log(`📊 Fetching cached floor prices from Supabase for ${contractAddresses.length} collections...`);
+        
+        // Convert all addresses to lowercase for consistent matching
+        const normalizedAddresses = contractAddresses.map(addr => addr.toLowerCase());
+        
+        const { data, error } = await supabase
+            .from('nft_collections')
+            .select(`
+                contract_address,
+                collection_name,
+                floor_price_eth,
+                floor_price_usd,
+                floor_price_currency,
+                magic_eden_slug,
+                network,
+                last_floor_price_update
+            `)
+            .in('contract_address', normalizedAddresses)
+            .not('floor_price_eth', 'is', null)  // Only get collections that have floor prices
+            .not('floor_price_usd', 'is', null);
+
+        if (error) {
+            console.error('❌ Error fetching cached floor prices:', error);
+            return {};
+        }
+
+        // Convert to the same format as the Magic Eden API response
+        const floorPricesMap = {};
+        let cachedCount = 0;
+        
+        data.forEach(collection => {
+            const contractAddress = collection.contract_address.toLowerCase();
+            
+            floorPricesMap[contractAddress] = {
+                floorPrice: collection.floor_price_eth || collection.floor_price_usd, // Prefer ETH, fallback to USD
+                currency: collection.floor_price_currency || 'ETH',
+                collectionName: collection.collection_name,
+                collectionSlug: collection.magic_eden_slug,
+                priceUSD: collection.floor_price_usd,
+                network: collection.network || 'ethereum',
+                lastUpdated: collection.last_floor_price_update,
+                cached: true // Flag to indicate this came from cache
+            };
+            
+            cachedCount++;
+            
+            console.log(`✅ Cached floor price: ${collection.collection_name} = ${collection.floor_price_eth || collection.floor_price_usd} ${collection.floor_price_currency || 'ETH'} ($${collection.floor_price_usd?.toFixed(2) || 'N/A'})`);
+        });
+
+        const missedCount = contractAddresses.length - cachedCount;
+        
+        console.log(`💾 Cache lookup summary:`);
+        console.log(`   ✅ Found in cache: ${cachedCount}/${contractAddresses.length} collections`);
+        if (missedCount > 0) {
+            console.log(`   ❌ Cache misses: ${missedCount} collections (will use Magic Eden API)`);
+        }
+        
+        return floorPricesMap;
+
+    } catch (err) {
+        console.error('❌ Unexpected error fetching cached floor prices:', err);
+        return {};
+    }
+};

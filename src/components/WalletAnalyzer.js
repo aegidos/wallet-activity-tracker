@@ -3,7 +3,7 @@ import axios from 'axios';
 import { format } from 'date-fns';
 import { ScatterChart, Scatter, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell } from 'recharts';
 import { Alchemy, Network } from 'alchemy-sdk';
-import { insertPortfolioSnapshot, insertNftCollections } from '../utils/supabase';
+import { insertPortfolioSnapshot, insertNftCollections, getCachedFloorPrices } from '../utils/supabase';
 
 // APE Staking Contract Addressf
 const STAKING_CONTRACT = '0x4Ba2396086d52cA68a37D9C0FA364286e9c7835a';
@@ -74,7 +74,7 @@ if (typeof window !== 'undefined') {
 }
 //For debugging reasons we set API Keys to a static if its started locally
 
-const ALCHEMY_API_KEY = process.env.NEXT_PUBLIC_ALCHEMY_API_KEY;
+const ALCHEMY_API_KEY = process.env.NEXT_PUBLIC_ALCHEMY_API_KEY ;
 const API_KEY = process.env.REACT_APP_ETHERSCAN_API_KEY;
 const BASE_URL = 'https://api.etherscan.io/v2/api?chainid=33139';
 const ZERO_ADDRESS = '0x0000000000000000000000000000000000000000';
@@ -964,20 +964,62 @@ function WalletAnalyzer({ account }) {
 
 
     const fetchFloorPrices = async (collectionMap) => {
-        console.log('\n=== 🏷️ Starting Floor Price Fetching (Magic Eden API) ===');
+        console.log('\n=== 🏷️ Starting Floor Price Fetching (Cache-First Strategy) ===');
         setFetchingFloorPrices(true);
         const floorPrices = {};
         const successfulFetches = [];
         const failedFetches = [];
         
-        // Rate limiting - Magic Eden allows 2 requests per second
-        const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
-        const RATE_LIMIT_DELAY = 500; // 500ms = 2 requests per second
+        // Step 1: Try to get floor prices from Supabase cache first
+        const contractAddresses = Object.keys(collectionMap);
+        console.log(`🗄️ Step 1: Checking Supabase cache for ${contractAddresses.length} collections...`);
         
-        let requestCount = 0;
+        const cachedFloorPrices = await getCachedFloorPrices(contractAddresses);
         
-        // Query each collection individually using the id parameter
+        // Add cached results to our final results
+        let cachedCount = 0;
+        const remainingCollections = {};
+        
         for (const [contractAddress, collectionData] of Object.entries(collectionMap)) {
+            const cachedPrice = cachedFloorPrices[contractAddress.toLowerCase()];
+            
+            if (cachedPrice) {
+                // Use cached floor price
+                floorPrices[contractAddress.toLowerCase()] = cachedPrice;
+                
+                successfulFetches.push({
+                    name: cachedPrice.collectionName,
+                    address: contractAddress.slice(0, 8) + '...',
+                    price: `${cachedPrice.floorPrice} ${cachedPrice.currency}`,
+                    priceUSD: cachedPrice.priceUSD ? `$${cachedPrice.priceUSD.toLocaleString()}` : 'N/A',
+                    slug: cachedPrice.collectionSlug,
+                    network: cachedPrice.network,
+                    cached: true
+                });
+                
+                console.log(`💾 Using cached price: ${cachedPrice.collectionName} = ${cachedPrice.floorPrice} ${cachedPrice.currency} ($${cachedPrice.priceUSD?.toFixed(2) || 'N/A'})`);
+                cachedCount++;
+            } else {
+                // Need to fetch from Magic Eden API
+                remainingCollections[contractAddress] = collectionData;
+            }
+        }
+        
+        console.log(`💾 Cache results: ${cachedCount}/${contractAddresses.length} collections found in cache`);
+        
+        // Step 2: Fetch remaining collections from Magic Eden API
+        const remainingCount = Object.keys(remainingCollections).length;
+        let requestCount = 0; // Track API calls made
+        
+        if (remainingCount > 0) {
+            console.log(`🌐 Step 2: Fetching ${remainingCount} collections from Magic Eden API...`);
+            
+            // Rate limiting - Magic Eden allows 2 requests per second
+            const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+            const RATE_LIMIT_DELAY = 500; // 500ms = 2 requests per second
+            
+            // Query each remaining collection individually using the id parameter
+            for (const [contractAddress, collectionData] of Object.entries(remainingCollections)) {
             const collectionName = collectionData.name || 'Unknown Collection';
             const network = collectionData.network || 'ethereum'; // Default to ethereum if no network specified
             
@@ -1081,20 +1123,28 @@ function WalletAnalyzer({ account }) {
                 });
                 console.log(`❌ ${collectionName}: Request failed - ${error.message}`);
             }
+            }
+        } else {
+            console.log(`🎉 All collections found in cache - no API calls needed!`);
         }
 
         // 🎊 FINAL SUMMARY
         const successCount = Object.keys(floorPrices).length;
         const totalCollections = Object.keys(collectionMap).length;
+        const apiCallsCount = requestCount || 0;
         
-        console.log(`%c🏁 MAGIC EDEN FLOOR PRICE SUMMARY 🏁`, 'color: #ffffff; background: #059669; font-weight: bold; padding: 4px 8px; border-radius: 4px;');
-        console.log(`%c   ✅ Successfully found: ${successCount}/${totalCollections} collections`, 'color: #10b981; font-weight: bold;');
+        console.log(`%c🏁 FLOOR PRICE FETCHING SUMMARY 🏁`, 'color: #ffffff; background: #059669; font-weight: bold; padding: 4px 8px; border-radius: 4px;');
+        console.log(`%c   ✅ Total found: ${successCount}/${totalCollections} collections`, 'color: #10b981; font-weight: bold;');
+        console.log(`%c   💾 From cache: ${cachedCount} collections`, 'color: #8b5cf6; font-weight: bold;');
+        console.log(`%c   🌐 From API: ${apiCallsCount} collections`, 'color: #3b82f6; font-weight: bold;');
+        console.log(`%c   ⚡ API calls saved: ${Math.max(0, totalCollections - apiCallsCount)}`, 'color: #10b981; font-weight: bold;');
         
         if (successfulFetches.length > 0) {
             console.log(`%c   💰 Collections with floor prices:`, 'color: #f59e0b; font-weight: bold;');
             successfulFetches.forEach(item => {
                 const networkInfo = item.network ? `[${item.network.toUpperCase()}]` : '';
-                console.log(`%c      ${item.name}: ${item.price} (${item.priceUSD}) ${networkInfo}`, 'color: #3b82f6;');
+                const sourceInfo = item.cached ? '💾 CACHED' : '🌐 API';
+                console.log(`%c      ${sourceInfo} ${item.name}: ${item.price} (${item.priceUSD}) ${networkInfo}`, 'color: #3b82f6;');
             });
         }
         
@@ -1106,9 +1156,9 @@ function WalletAnalyzer({ account }) {
             });
         }
         
-        console.log(`%c   🕒 Total API requests made: ${requestCount}`, 'color: #6b7280;');
+        console.log(`%c   🕒 Total API requests made: ${apiCallsCount}`, 'color: #6b7280;');
         console.log(`%c   ⚡ Rate limit: 2 requests/second (Magic Eden requirement)`, 'color: #6b7280;');
-        console.log('%c=== End Magic Eden Summary ===\n', 'color: #6b7280;');
+        console.log('%c=== End Floor Price Fetching Summary ===\n', 'color: #6b7280;');
 
         setNftFloorPrices(floorPrices);
         setFetchingFloorPrices(false);
