@@ -1,0 +1,79 @@
+name: Update NFT Floor Prices
+
+# Schedule to run every hour at the top of the hour
+on:
+  schedule:
+    - cron: '0 * * * *'  # Every hour: minute 0, every hour, every day, every month, every day of week
+  
+  # Allow manual triggering for testing
+  workflow_dispatch:
+    inputs:
+      debug:
+        description: 'Enable debug logging'
+        required: false
+        default: 'false'
+
+# Ensure only one instance runs at a time
+concurrency:
+  group: floor-price-update
+  cancel-in-progress: false
+
+jobs:
+  update-floor-prices:
+    name: Fetch and Update Floor Prices
+    runs-on: ubuntu-latest
+    timeout-minutes: 30  # 30 minutes maximum execution time
+    
+    steps:
+      - name: 📥 Checkout Repository
+        uses: actions/checkout@v4
+        
+      - name: 🟢 Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+          cache: 'npm'
+          
+      - name: 📦 Install Dependencies
+        run: |
+          npm ci --only=production
+          # Only install required dependencies for the script
+          npm install @supabase/supabase-js
+          
+      - name: 🏷️ Update Floor Prices
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+          NODE_ENV: production
+        run: |
+          echo "🚀 Starting floor price update..."
+          echo "📅 Current time: $(date -u)"
+          echo "🌐 Node.js version: $(node --version)"
+          echo "📦 NPM version: $(npm --version)"
+          echo ""
+          
+          # Run the floor price update script
+          node scripts/update-floor-prices.js
+          
+      - name: 📊 Job Summary
+        if: always()
+        run: |
+          echo "## Floor Price Update Summary" >> $GITHUB_STEP_SUMMARY
+          echo "- **Execution Time**: $(date -u)" >> $GITHUB_STEP_SUMMARY
+          echo "- **Status**: ${{ job.status }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Repository**: ${{ github.repository }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Commit**: ${{ github.sha }}" >> $GITHUB_STEP_SUMMARY
+          
+          if [ "${{ job.status }}" = "failure" ]; then
+            echo "- **❌ Error**: Check the logs above for details" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "- **✅ Success**: Floor prices updated successfully" >> $GITHUB_STEP_SUMMARY
+          fi
+          
+      - name: 🚨 Notify on Failure
+        if: failure()
+        run: |
+          echo "❌ Floor price update failed!"
+          echo "📧 Consider setting up notifications for production use"
+          echo "🔍 Check the logs above for error details"
+          exit 1
