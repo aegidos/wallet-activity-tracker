@@ -35,8 +35,56 @@ const handler = async (event, context) => {
         
         console.log(`📊 Processing ${collections.length} collections for floor price updates`);
         
-        // Step 2: Fetch floor prices from Magic Eden API
-        const { results: floorPriceResults, failures, requestCount } = await fetchMultipleFloorPrices(collections);
+        // Calculate processing time estimate
+        const BATCH_SIZE = 20; // Process 20 collections at a time to stay under 30s timeout
+        const TIMEOUT_BUFFER = 5000; // Reserve 5 seconds for database updates
+        const MAX_EXECUTION_TIME = 25000; // 25 seconds max for API calls
+        
+        let allResults = [];
+        let allFailures = [];
+        let totalRequestCount = 0;
+        let processedCount = 0;
+        
+        // Process collections in batches
+        for (let i = 0; i < collections.length; i += BATCH_SIZE) {
+            const remainingTime = MAX_EXECUTION_TIME - (Date.now() - startTime);
+            
+            if (remainingTime < 10000) { // Less than 10 seconds remaining
+                console.warn(`⏰ Stopping processing with ${remainingTime}ms remaining to ensure database updates can complete`);
+                break;
+            }
+            
+            const batch = collections.slice(i, i + BATCH_SIZE);
+            const batchNumber = Math.floor(i / BATCH_SIZE) + 1;
+            const totalBatches = Math.ceil(collections.length / BATCH_SIZE);
+            
+            console.log(`\n🔄 Processing batch ${batchNumber}/${totalBatches} (${batch.length} collections)`);
+            
+            // Step 2: Fetch floor prices from Magic Eden API for this batch
+            const { results: batchResults, failures: batchFailures, requestCount: batchRequestCount } = await fetchMultipleFloorPrices(batch);
+            
+            allResults.push(...batchResults);
+            allFailures.push(...batchFailures);
+            totalRequestCount += batchRequestCount;
+            processedCount += batch.length;
+            
+            console.log(`✅ Batch ${batchNumber} complete: ${batchResults.length}/${batch.length} successful`);
+            
+            // If this isn't the last batch, update database immediately to avoid timeout
+            if (batchResults.length > 0 && (i + BATCH_SIZE < collections.length || Date.now() - startTime > 20000)) {
+                console.log(`💾 Updating database for batch ${batchNumber}...`);
+                
+                // Step 3: Convert prices to USD where needed
+                const pricesWithUSD = await convertPricesToUSD(batchResults);
+                
+                // Step 4: Update database with new floor prices
+                const batchUpdateResults = await updateFloorPrices(pricesWithUSD);
+                console.log(`✅ Batch ${batchNumber} database update: ${batchUpdateResults.successful} successful, ${batchUpdateResults.failed} failed`);
+            }
+        }
+        
+        // Final database update for any remaining results
+        const floorPriceResults = allResults;
         
         if (floorPriceResults.length === 0) {
             console.warn('⚠️ No successful floor price fetches');
@@ -45,26 +93,37 @@ const handler = async (event, context) => {
                 body: JSON.stringify({
                     success: true,
                     message: 'No floor prices fetched successfully',
-                    apiRequests: requestCount,
-                    failures: failures.length
+                    apiRequests: totalRequestCount,
+                    failures: allFailures.length,
+                    processedCount: processedCount
                 })
             };
         }
         
-        // Step 3: Convert prices to USD where needed
-        const pricesWithUSD = await convertPricesToUSD(floorPriceResults);
+        // Final batch processing (if any results weren't updated yet)
+        let updateResults = { successful: 0, failed: 0, results: [] };
         
-        // Step 4: Update database with new floor prices
-        const updateResults = await updateFloorPrices(pricesWithUSD);
+        if (floorPriceResults.length > 0) {
+            console.log(`\n💾 Final database update for remaining ${floorPriceResults.length} results...`);
+            
+            // Step 3: Convert prices to USD where needed
+            const pricesWithUSD = await convertPricesToUSD(floorPriceResults);
+            
+            // Step 4: Update database with new floor prices
+            updateResults = await updateFloorPrices(pricesWithUSD);
+        }
         
         // Step 5: Log execution statistics
         const executionTime = Date.now() - startTime;
         const stats = {
             executionTime,
-            collectionsProcessed: collections.length,
+            collectionsProcessed: processedCount,
+            totalCollections: collections.length,
+            successfulFetches: allResults.length,
+            failedFetches: allFailures.length,
             successfulUpdates: updateResults.successful,
             failedUpdates: updateResults.failed,
-            apiRequests: requestCount,
+            apiRequests: totalRequestCount,
             timestamp: new Date().toISOString()
         };
         
@@ -80,15 +139,16 @@ const handler = async (event, context) => {
             },
             body: JSON.stringify({
                 success: true,
-                message: 'Floor prices updated successfully',
-                stats: {
-                    executionTime: `${executionTime}ms`,
-                    collectionsProcessed: collections.length,
-                    successfulUpdates: updateResults.successful,
-                    failedUpdates: updateResults.failed,
-                    apiRequests: requestCount
-                },
-                timestamp: new Date().toISOString()
+                message: `Floor price update completed successfully`,
+                stats: stats,
+                executionTimeMs: executionTime,
+                totalCollections: collections.length,
+                processedCollections: processedCount,
+                successfulFetches: allResults.length,
+                failedFetches: allFailures.length,
+                successfulUpdates: updateResults.successful,
+                failedUpdates: updateResults.failed,
+                apiRequests: totalRequestCount
             })
         };
         
