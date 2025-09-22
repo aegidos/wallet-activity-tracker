@@ -3835,7 +3835,6 @@ function WalletAnalyzer({ account }) {
                     <thead>
                         <tr>
                             <th>Logo</th>
-                            <th>Token Name</th>
                             <th>Symbol</th>
                             <th>Balance</th>
                             <th>Price USD</th>
@@ -3965,9 +3964,6 @@ function WalletAnalyzer({ account }) {
                                                 )}
                                             </td>
                                             <td style={token.isNative ? { fontWeight: '600' } : {}}>
-                                                {token.name || 'Unknown Token'}
-                                            </td>
-                                            <td style={token.isNative ? { fontWeight: '600' } : {}}>
                                                 {token.symbol || 'N/A'}
                                             </td>
                                             <td style={token.isNative ? { fontWeight: '600' } : {}}>
@@ -3994,7 +3990,7 @@ function WalletAnalyzer({ account }) {
                         {/* Remove the old separate ERC-20 token mapping */}
                         {networkBalances.length === 0 && (
                             <tr>
-                                <td colSpan="6" style={{ 
+                                <td colSpan="5" style={{ 
                                     textAlign: 'center', 
                                     padding: '40px', 
                                     color: '#9ca3af',
