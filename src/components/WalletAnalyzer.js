@@ -4621,16 +4621,6 @@ function WalletAnalyzer({ account, connectedAccount, onDisconnect, onClearAnalys
                                             fontSize: '0.875rem',
                                             borderBottom: '1px solid #374151'
                                         }}>
-                                            Network
-                                        </th>
-                                        <th style={{ 
-                                            padding: '1rem',
-                                            textAlign: 'center',
-                                            color: '#e5e7eb',
-                                            fontWeight: '600',
-                                            fontSize: '0.875rem',
-                                            borderBottom: '1px solid #374151'
-                                        }}>
                                             NFTs Owned
                                         </th>
                                         <th style={{ 
@@ -4763,21 +4753,6 @@ function WalletAnalyzer({ account, connectedAccount, onDisconnect, onClearAnalys
                                                     }}>
                                                         ⚠️ {collectionData.duplicateCount} duplicate{collectionData.duplicateCount > 1 ? 's' : ''} removed
                                                     </div>
-                                                )}
-                                            </td>
-                                            <td style={{ padding: '1rem', textAlign: 'center', verticalAlign: 'top' }}>
-                                                {collectionData.collection.network && (
-                                                    <span style={{ 
-                                                        backgroundColor: collectionData.collection.network.name === 'ethereum' ? '#627eea' : '#ff6b35',
-                                                        color: 'white',
-                                                        padding: '0.25rem 0.5rem',
-                                                        borderRadius: '0.25rem',
-                                                        fontSize: '0.75rem',
-                                                        fontWeight: '500',
-                                                        textTransform: 'uppercase'
-                                                    }}>
-                                                        {collectionData.collection.network.displayName || collectionData.collection.network.name}
-                                                    </span>
                                                 )}
                                             </td>
                                             <td style={{ 

@@ -235,8 +235,8 @@ function App() {
     return (
         <div className="container">
             <div className="header" style={{ marginBottom: '1rem' }}>
-                <h1 style={{ marginBottom: '0.5rem' }}>ApeObserver</h1>
-                <p style={{ margin: '0' }}>Analyze wallet transactions and calculate NFT trading profit/loss on APE Chain</p>
+                <h1 style={{ marginTop: '0.5rem' ,marginBottom: '0.5rem' }}>ApeObserver</h1>
+                <p style={{ margin: '0', marginBottom: '-10.5rem' }}>Analyze wallet transactions and calculate NFT trading profit/loss on APE Chain</p>
             </div>
 
             {!addressToAnalyze ? (
