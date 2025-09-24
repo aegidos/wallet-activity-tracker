@@ -314,9 +314,7 @@ const updateFloorPrices = async (floorPriceData) => {
                     floor_price_usd: priceData.floorPriceUSD,
                     floor_price_currency: priceData.currency,
                     magic_eden_slug: priceData.magicEdenSlug,
-                    last_floor_price_update: priceData.lastUpdated,
-                    // Store validation statistics for transparency
-                    validation_stats: priceData.validationStats ? JSON.stringify(priceData.validationStats) : null
+                    last_floor_price_update: priceData.lastUpdated
                 })
                 .eq('contract_address', priceData.contractAddress)
                 .select();
