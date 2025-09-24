@@ -23,7 +23,6 @@ const supabase = createClient(supabaseUrl, supabaseKey);
 
 // Magic Eden API configuration
 const RATE_LIMIT_DELAY = 500; // 500ms between requests (2 requests/second)
-const ENABLE_STRICT_VALIDATION = process.env.STRICT_VALIDATION === 'true'; // Can be disabled via env var
 
 /**
  * Delay function for rate limiting
@@ -63,50 +62,44 @@ const getAllNftCollections = async () => {
 
 /**
  * Check if a collection is active and has realistic pricing
- * Filters out collections with suspicious "moon prices"
- * Now more lenient when sales data is unavailable from API
+ * Uses floorSale data and isSpam flag for validation
  */
-const isCollectionActive = (stats, days = 30) => {
+const isCollectionActive = (stats) => {
     console.log(`🔍 Validating collection activity:`, {
-        sales: stats.sales_last_30d,
+        floorSale30d: stats.floor_sale_30d,
         owners: stats.owners,
-        floorPrice: stats.floor_price,
-        medianSalePrice: stats.median_sale_price
+        floorPriceUSD: stats.floor_price_usd,
+        isSpam: stats.is_spam
     });
     
-    // If we have sales data and it's 0, that's a red flag
-    // But if sales data is missing (null/undefined), we'll be more lenient
-    if (stats.sales_last_30d === 0 && stats.sales_last_30d !== null && stats.sales_last_30d !== undefined) {
-        console.warn(`❌ Collection has confirmed 0 sales in last ${days} days`);
+    // Immediately reject spam collections
+    if (stats.is_spam === true) {
+        console.warn(`❌ Collection is marked as spam`);
         return false;
     }
     
-    // If sales data is missing, log it but don't fail validation
-    if (stats.sales_last_30d === null || stats.sales_last_30d === undefined) {
-        console.log(`⚠️ Sales data unavailable from API - proceeding with caution`);
-    }
-    
-    // Only enforce owner count if we have the data and it's very low
-    if (stats.owners !== null && stats.owners !== undefined && stats.owners < 5) {
-        console.warn(`❌ Collection has very few owners: ${stats.owners} (minimum: 5)`);
+    // Must have reasonable owner count (indicates some distribution)
+    if (stats.owners !== null && stats.owners !== undefined && stats.owners < 10) {
+        console.warn(`❌ Collection has too few owners: ${stats.owners} (minimum: 10)`);
         return false;
     }
     
-    // Only check price ratio if we have both floor price and median sale price data
-    if (stats.median_sale_price && stats.median_sale_price > 0 && stats.floor_price) {
-        const priceRatio = stats.floor_price / stats.median_sale_price;
-        if (priceRatio > 10) {
-            console.warn(`❌ Floor price (${stats.floor_price}) is ${priceRatio.toFixed(1)}x median sale price (${stats.median_sale_price}) - possible moon price`);
+    // Check for recent floor sale activity (30 days)
+    if (stats.floor_sale_30d !== null && stats.floor_sale_30d !== undefined) {
+        if (stats.floor_sale_30d === 0) {
+            console.warn(`❌ No floor sales in last 30 days`);
             return false;
         }
+        console.log(`✅ Floor sale activity detected: $${stats.floor_sale_30d} (30d)`);
     }
     
-    // Additional validation: Extremely high floor prices (>10 ETH equivalent) require extra scrutiny
-    if (stats.floor_price > 10) {
-        console.log(`⚠️ High floor price detected (${stats.floor_price}) - requires manual validation but allowing for now`);
+    // Additional validation: Extremely high floor prices (>$100k) are suspicious
+    if (stats.floor_price_usd && stats.floor_price_usd > 100000) {
+        console.warn(`❌ Extremely high floor price ($${stats.floor_price_usd}) - likely unrealistic`);
+        return false;
     }
     
-    console.log(`✅ Collection passes relaxed activity validation`);
+    console.log(`✅ Collection passes validation`);
     return true;
 };
 
@@ -133,70 +126,51 @@ const fetchCollectionFloorPrice = async (contractAddress, network = 'ethereum', 
         if (data.collections && data.collections.length > 0) {
             const collection = data.collections[0];
             
-            // DEBUG: Log complete collection structure for the first few collections
-            if (Math.random() < 0.3) { // Log ~30% of collections for debugging
-                console.log(`🐛 DEBUG - Complete API response for ${collectionName}:`, JSON.stringify(collection, null, 2));
-            }
-            
             if (collection.floorAsk && collection.floorAsk.price && collection.floorAsk.price.amount) {
                 const floorPrice = collection.floorAsk.price.amount.decimal;
                 const floorPriceUSD = collection.floorAsk.price.amount.usd;
                 const currency = collection.floorAsk.price.currency.symbol;
                 
-                // Extract collection statistics for activity validation
-                // Log the raw collection data structure for debugging
-                console.log(`🔍 Raw API response structure for ${collectionName}:`, {
-                    volume: collection.volume,
-                    ownerCount: collection.ownerCount,
-                    tokenCount: collection.tokenCount,
-                    floorAsk: collection.floorAsk?.price?.amount
-                });
-                
+                // Extract collection statistics for validation using new API fields
                 const stats = {
-                    sales_last_30d: collection.volume?.['30day']?.count || 
-                                   collection.volume?.['1month']?.count || 
-                                   collection.sales30d || 
-                                   null, // More flexible field checking
-                    owners: collection.ownerCount || collection.owners || null,
-                    floor_price: floorPriceUSD || floorPrice, // Use USD if available, otherwise native currency
-                    median_sale_price: collection.volume?.['30day']?.median || 
-                                     collection.volume?.['1month']?.median ||
-                                     collection.medianPrice ||
-                                     null // More flexible field checking
+                    floor_sale_30d: collection.floorSale?.['30day'] || null,
+                    owners: collection.ownerCount || null,
+                    floor_price_usd: floorPriceUSD || null,
+                    is_spam: collection.isSpam || false
                 };
                 
-                console.log(`📊 Extracted stats for ${collectionName}:`, stats);
+                // Validate collection activity - set suspicious collections to zero instead of filtering
+                const isActive = isCollectionActive(stats);
                 
-                // Validate collection activity to filter out suspicious collections
-                // If strict validation is disabled and we have missing data, use minimal validation
-                if (ENABLE_STRICT_VALIDATION || (stats.sales_last_30d !== null && stats.median_sale_price !== null)) {
-                    if (!isCollectionActive(stats)) {
-                        console.warn(`🚫 ${collectionName}: Collection filtered out due to suspicious activity or pricing`);
-                        return null;
-                    }
+                if (!isActive) {
+                    console.warn(`🚫 ${collectionName}: Suspicious collection - setting floor price to ZERO`);
+                    return {
+                        contractAddress: contractAddress.toLowerCase(),
+                        floorPrice: 0,
+                        floorPriceUSD: 0,
+                        currency: currency,
+                        collectionName: collection.name || collectionName,
+                        magicEdenSlug: collection.slug,
+                        network: network,
+                        lastUpdated: new Date().toISOString(),
+                        validationStats: stats,
+                        suspicious: true // Flag for tracking
+                    };
                 } else {
-                    console.log(`⚠️ ${collectionName}: Using minimal validation due to missing API data`);
-                    // Minimal validation: just check for extremely unrealistic floor prices
-                    if (floorPriceUSD && floorPriceUSD > 1000000) { // $1M+ floor price
-                        console.warn(`🚫 ${collectionName}: Extremely high floor price ($${floorPriceUSD}) - likely unrealistic`);
-                        return null;
-                    }
+                    console.log(`✅ ${collectionName}: ${floorPrice} ${currency} ($${floorPriceUSD?.toLocaleString() || 'N/A'}) - VALIDATED`);
+                    return {
+                        contractAddress: contractAddress.toLowerCase(),
+                        floorPrice: floorPrice,
+                        floorPriceUSD: floorPriceUSD,
+                        currency: currency,
+                        collectionName: collection.name || collectionName,
+                        magicEdenSlug: collection.slug,
+                        network: network,
+                        lastUpdated: new Date().toISOString(),
+                        validationStats: stats,
+                        suspicious: false
+                    };
                 }
-                
-                console.log(`✅ ${collectionName}: ${floorPrice} ${currency} ($${floorPriceUSD?.toLocaleString() || 'N/A'}) - VALIDATED`);
-                
-                return {
-                    contractAddress: contractAddress.toLowerCase(),
-                    floorPrice: floorPrice,
-                    floorPriceUSD: floorPriceUSD,
-                    currency: currency,
-                    collectionName: collection.name || collectionName,
-                    magicEdenSlug: collection.slug,
-                    network: network,
-                    lastUpdated: new Date().toISOString(),
-                    // Store validation stats for future reference
-                    validationStats: stats
-                };
             } else {
                 console.warn(`❌ ${collectionName}: Found in Magic Eden but no floor price available`);
                 return null;
@@ -221,7 +195,7 @@ const fetchMultipleFloorPrices = async (collections) => {
     
     const results = [];
     const failures = [];
-    const filtered = [];
+    const suspicious = [];
     let requestCount = 0;
     
     for (const collection of collections) {
@@ -241,10 +215,13 @@ const fetchMultipleFloorPrices = async (collections) => {
         
         if (floorPriceData) {
             results.push(floorPriceData);
+            // Track suspicious collections separately
+            if (floorPriceData.suspicious) {
+                suspicious.push(floorPriceData);
+            }
         } else {
-            // Check if it was filtered due to activity validation or actual failure
-            // (we can distinguish this by looking at the console output patterns)
-            const failureReason = 'API failure or validation filter';
+            // API failure or collection not found
+            const failureReason = 'API failure or collection not found';
             failures.push({
                 contract_address: collection.contract_address,
                 collection_name: collection.collection_name,
@@ -254,25 +231,36 @@ const fetchMultipleFloorPrices = async (collections) => {
         }
     }
     
+    const validCollections = results.filter(r => !r.suspicious);
+    
     // Summary
     console.log(`\n🏁 Floor Price Fetch & Validation Summary:`);
     console.log(`   📊 Total collections processed: ${collections.length}`);
-    console.log(`   ✅ Successfully validated & fetched: ${results.length} collections`);
-    console.log(`   ❌ Failed or filtered out: ${failures.length} collections`);
-    console.log(`   🔍 Success rate: ${((results.length / collections.length) * 100).toFixed(1)}%`);
+    console.log(`   ✅ Valid collections with prices: ${validCollections.length}`);
+    console.log(`   🚫 Suspicious collections (set to $0): ${suspicious.length}`);
+    console.log(`   ❌ API failures: ${failures.length}`);
+    console.log(`   🔍 Data retrieval rate: ${((results.length / collections.length) * 100).toFixed(1)}%`);
     console.log(`   🕒 Total API requests: ${requestCount}`);
     console.log(`   ⚡ Rate limit: 2 requests/second`);
-    console.log(`   🚫 Moon price protection: Active\n`);
+    console.log(`   �️ Moon price protection: Active\n`);
+    
+    if (suspicious.length > 0) {
+        console.log(`🚫 Suspicious Collections (Floor Price Set to $0):`);
+        suspicious.forEach((susp, index) => {
+            console.log(`   ${index + 1}. ${susp.collectionName} (${susp.contractAddress?.substring(0, 8)}...)`);
+        });
+        console.log('');
+    }
     
     if (failures.length > 0) {
-        console.log(`🚫 Filtered/Failed Collections:`);
+        console.log(`❌ Failed Collections (API Issues):`);
         failures.forEach((failure, index) => {
             console.log(`   ${index + 1}. ${failure.collection_name} (${failure.contract_address?.substring(0, 8)}...)`);
         });
         console.log('');
     }
     
-    return { results, failures, requestCount, filtered };
+    return { results, failures, requestCount, suspicious };
 };
 
 /**
@@ -328,8 +316,7 @@ const updateFloorPrices = async (floorPriceData) => {
                     magic_eden_slug: priceData.magicEdenSlug,
                     last_floor_price_update: priceData.lastUpdated,
                     // Store validation statistics for transparency
-                    validation_stats: priceData.validationStats ? JSON.stringify(priceData.validationStats) : null,
-                    is_active: true // Mark as active since it passed validation
+                    validation_stats: priceData.validationStats ? JSON.stringify(priceData.validationStats) : null
                 })
                 .eq('contract_address', priceData.contractAddress)
                 .select();
@@ -388,15 +375,11 @@ async function main() {
         }
         
         // Step 2: Fetch floor prices from Magic Eden API with activity validation
-        const { results: floorPriceResults, failures, requestCount, filtered } = await fetchMultipleFloorPrices(collections);
+        const { results: floorPriceResults, failures, requestCount, suspicious } = await fetchMultipleFloorPrices(collections);
         
         if (floorPriceResults.length === 0) {
-            console.warn('⚠️ No collections passed validation - all were filtered out or failed');
-            console.warn('💡 This could indicate:');
-            console.warn('   - Collections have no recent sales activity');
-            console.warn('   - Floor prices are unrealistically high (moon prices)');
-            console.warn('   - Collections have too few owners');
-            console.warn('   - API connectivity issues');
+            console.warn('⚠️ No collections could be processed - all API requests failed');
+            console.warn('💡 This indicates API connectivity issues');
             return;
         }
         
@@ -408,35 +391,39 @@ async function main() {
         
         // Step 5: Log comprehensive execution statistics
         const executionTime = Date.now() - startTime;
-        const filterRate = ((failures.length / collections.length) * 100).toFixed(1);
-        const successRate = ((floorPriceResults.length / collections.length) * 100).toFixed(1);
+        const validCollections = floorPriceResults.filter(r => !r.suspicious);
+        const suspiciousRate = ((suspicious.length / collections.length) * 100).toFixed(1);
+        const validRate = ((validCollections.length / collections.length) * 100).toFixed(1);
+        const dataRate = ((floorPriceResults.length / collections.length) * 100).toFixed(1);
         
         console.log('\n📈 Comprehensive Execution Statistics:');
         console.log(`   🕒 Execution time: ${executionTime}ms (${(executionTime / 1000).toFixed(1)}s)`);
         console.log(`   📊 Total collections processed: ${collections.length}`);
-        console.log(`   ✅ Passed validation & updated: ${floorPriceResults.length} (${successRate}%)`);
-        console.log(`   🚫 Filtered or failed: ${failures.length} (${filterRate}%)`);
+        console.log(`   ✅ Valid collections with prices: ${validCollections.length} (${validRate}%)`);
+        console.log(`   🚫 Suspicious collections (set to $0): ${suspicious.length} (${suspiciousRate}%)`);
+        console.log(`   ❌ API failures: ${failures.length}`);
+        console.log(`   📡 Data retrieval rate: ${dataRate}%`);
         console.log(`   💾 Database updates successful: ${updateResults.successful}`);
         console.log(`   ❌ Database updates failed: ${updateResults.failed}`);
         console.log(`   🌐 Total API requests: ${requestCount}`);
         console.log(`   ⚡ Average request time: ${(executionTime / requestCount).toFixed(0)}ms`);
-        console.log(`   🛡️ Moon price protection: ACTIVE`);
-        console.log(`   📊 Quality assurance: Only active collections with realistic pricing`);
+        console.log(`   🛡️ Moon price protection: ACTIVE (suspicious collections set to $0)`);
+        console.log(`   📊 Quality assurance: Portfolio protection from inflated valuations`);
         console.log(`   📅 Completed at: ${new Date().toISOString()}`);
         
         // Log recommendations based on results
-        if (filterRate > 50) {
-            console.log('\n💡 High Filter Rate Detected:');
-            console.log('   - Consider reviewing collection selection criteria');
-            console.log('   - Many collections may have stale or unrealistic floor prices');
-            console.log('   - This filtering protects against inflated portfolio valuations');
+        if (suspiciousRate > 30) {
+            console.log('\n💡 High Suspicious Collection Rate:');
+            console.log('   - Many collections have suspicious characteristics (spam, low activity, etc.)');
+            console.log('   - These have been set to $0 to prevent inflated portfolio values');
+            console.log('   - Portfolio calculations will be more realistic');
         }
         
-        if (floorPriceResults.length > 0) {
-            console.log(`\n🎯 Portfolio Impact: Floor prices updated for ${floorPriceResults.length} active collections`);
-            console.log('   - These collections have recent sales activity');
-            console.log('   - Floor prices are within realistic ranges');
-            console.log('   - Portfolio valuations will be more accurate');
+        if (validCollections.length > 0) {
+            console.log(`\n🎯 Portfolio Impact: ${validCollections.length} collections have realistic floor prices`);
+            console.log(`   - ${suspicious.length} suspicious collections neutralized (set to $0)`);
+            console.log('   - Portfolio valuations protected from moon prices');
+            console.log('   - Only legitimate collections contribute to portfolio value');
         }
         
         // Exit with success
