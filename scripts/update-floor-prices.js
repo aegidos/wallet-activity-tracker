@@ -23,6 +23,7 @@ const supabase = createClient(supabaseUrl, supabaseKey);
 
 // Magic Eden API configuration
 const RATE_LIMIT_DELAY = 500; // 500ms between requests (2 requests/second)
+const ENABLE_STRICT_VALIDATION = process.env.STRICT_VALIDATION === 'true'; // Can be disabled via env var
 
 /**
  * Delay function for rate limiting
@@ -63,6 +64,7 @@ const getAllNftCollections = async () => {
 /**
  * Check if a collection is active and has realistic pricing
  * Filters out collections with suspicious "moon prices"
+ * Now more lenient when sales data is unavailable from API
  */
 const isCollectionActive = (stats, days = 30) => {
     console.log(`🔍 Validating collection activity:`, {
@@ -72,25 +74,39 @@ const isCollectionActive = (stats, days = 30) => {
         medianSalePrice: stats.median_sale_price
     });
     
-    // Must have sales in the last 30 days
-    if (stats.sales_last_30d === 0) {
-        console.warn(`❌ Collection has no sales in last ${days} days`);
+    // If we have sales data and it's 0, that's a red flag
+    // But if sales data is missing (null/undefined), we'll be more lenient
+    if (stats.sales_last_30d === 0 && stats.sales_last_30d !== null && stats.sales_last_30d !== undefined) {
+        console.warn(`❌ Collection has confirmed 0 sales in last ${days} days`);
         return false;
     }
     
-    // Must have minimum number of owners (indicates some distribution)
-    if (stats.owners < 10) {
-        console.warn(`❌ Collection has too few owners: ${stats.owners} (minimum: 10)`);
+    // If sales data is missing, log it but don't fail validation
+    if (stats.sales_last_30d === null || stats.sales_last_30d === undefined) {
+        console.log(`⚠️ Sales data unavailable from API - proceeding with caution`);
+    }
+    
+    // Only enforce owner count if we have the data and it's very low
+    if (stats.owners !== null && stats.owners !== undefined && stats.owners < 5) {
+        console.warn(`❌ Collection has very few owners: ${stats.owners} (minimum: 5)`);
         return false;
     }
     
-    // Floor price shouldn't be more than 10x the median sale price (anti-moon price)
-    if (stats.median_sale_price && stats.floor_price > stats.median_sale_price * 10) {
-        console.warn(`❌ Floor price (${stats.floor_price}) is >10x median sale price (${stats.median_sale_price}) - possible moon price`);
-        return false;
+    // Only check price ratio if we have both floor price and median sale price data
+    if (stats.median_sale_price && stats.median_sale_price > 0 && stats.floor_price) {
+        const priceRatio = stats.floor_price / stats.median_sale_price;
+        if (priceRatio > 10) {
+            console.warn(`❌ Floor price (${stats.floor_price}) is ${priceRatio.toFixed(1)}x median sale price (${stats.median_sale_price}) - possible moon price`);
+            return false;
+        }
     }
     
-    console.log(`✅ Collection passes activity validation`);
+    // Additional validation: Extremely high floor prices (>10 ETH equivalent) require extra scrutiny
+    if (stats.floor_price > 10) {
+        console.log(`⚠️ High floor price detected (${stats.floor_price}) - requires manual validation but allowing for now`);
+    }
+    
+    console.log(`✅ Collection passes relaxed activity validation`);
     return true;
 };
 
@@ -117,25 +133,54 @@ const fetchCollectionFloorPrice = async (contractAddress, network = 'ethereum', 
         if (data.collections && data.collections.length > 0) {
             const collection = data.collections[0];
             
+            // DEBUG: Log complete collection structure for the first few collections
+            if (Math.random() < 0.3) { // Log ~30% of collections for debugging
+                console.log(`🐛 DEBUG - Complete API response for ${collectionName}:`, JSON.stringify(collection, null, 2));
+            }
+            
             if (collection.floorAsk && collection.floorAsk.price && collection.floorAsk.price.amount) {
                 const floorPrice = collection.floorAsk.price.amount.decimal;
                 const floorPriceUSD = collection.floorAsk.price.amount.usd;
                 const currency = collection.floorAsk.price.currency.symbol;
                 
                 // Extract collection statistics for activity validation
+                // Log the raw collection data structure for debugging
+                console.log(`🔍 Raw API response structure for ${collectionName}:`, {
+                    volume: collection.volume,
+                    ownerCount: collection.ownerCount,
+                    tokenCount: collection.tokenCount,
+                    floorAsk: collection.floorAsk?.price?.amount
+                });
+                
                 const stats = {
-                    sales_last_30d: collection.volume?.['30day']?.count || 0,
-                    owners: collection.ownerCount || 0,
+                    sales_last_30d: collection.volume?.['30day']?.count || 
+                                   collection.volume?.['1month']?.count || 
+                                   collection.sales30d || 
+                                   null, // More flexible field checking
+                    owners: collection.ownerCount || collection.owners || null,
                     floor_price: floorPriceUSD || floorPrice, // Use USD if available, otherwise native currency
-                    median_sale_price: collection.volume?.['30day']?.median || null
+                    median_sale_price: collection.volume?.['30day']?.median || 
+                                     collection.volume?.['1month']?.median ||
+                                     collection.medianPrice ||
+                                     null // More flexible field checking
                 };
                 
-                console.log(`📊 Collection stats for ${collectionName}:`, stats);
+                console.log(`📊 Extracted stats for ${collectionName}:`, stats);
                 
                 // Validate collection activity to filter out suspicious collections
-                if (!isCollectionActive(stats)) {
-                    console.warn(`🚫 ${collectionName}: Collection filtered out due to suspicious activity or pricing`);
-                    return null;
+                // If strict validation is disabled and we have missing data, use minimal validation
+                if (ENABLE_STRICT_VALIDATION || (stats.sales_last_30d !== null && stats.median_sale_price !== null)) {
+                    if (!isCollectionActive(stats)) {
+                        console.warn(`🚫 ${collectionName}: Collection filtered out due to suspicious activity or pricing`);
+                        return null;
+                    }
+                } else {
+                    console.log(`⚠️ ${collectionName}: Using minimal validation due to missing API data`);
+                    // Minimal validation: just check for extremely unrealistic floor prices
+                    if (floorPriceUSD && floorPriceUSD > 1000000) { // $1M+ floor price
+                        console.warn(`🚫 ${collectionName}: Extremely high floor price ($${floorPriceUSD}) - likely unrealistic`);
+                        return null;
+                    }
                 }
                 
                 console.log(`✅ ${collectionName}: ${floorPrice} ${currency} ($${floorPriceUSD?.toLocaleString() || 'N/A'}) - VALIDATED`);
