@@ -85,13 +85,17 @@ const isCollectionActive = (stats) => {
     }
     
     // Check for recent floor sale activity (30 days)
-    if (stats.floor_sale_30d !== null && stats.floor_sale_30d !== undefined) {
-        if (stats.floor_sale_30d === 0) {
-            console.warn(`❌ No floor sales in last 30 days`);
-            return false;
-        }
-        console.log(`✅ Floor sale activity detected: $${stats.floor_sale_30d} (30d)`);
+    if (stats.floor_sale_30d === null || stats.floor_sale_30d === undefined) {
+        console.warn(`❌ No floor sales data available (30d)`);
+        return false;
     }
+    
+    if (stats.floor_sale_30d === 0) {
+        console.warn(`❌ No floor sales in last 30 days`);
+        return false;
+    }
+    
+    console.log(`✅ Floor sale activity detected: $${stats.floor_sale_30d} (30d)`);
     
     // Additional validation: Extremely high floor prices (>$100k) are suspicious
     if (stats.floor_price_usd && stats.floor_price_usd > 100000) {
