@@ -64,13 +64,14 @@ const getAllNftCollections = async () => {
  * Check if a collection is active and has realistic pricing
  * Uses floorSale data and isSpam flag for validation
  */
-const isCollectionActive = (stats) => {
+const isCollectionActive = (stats, currentFloorPrice = null) => {
     console.log(`🔍 Validating collection activity:`, {
         floorSale30d: stats.floor_sale_30d,
+        currentFloorPrice: currentFloorPrice,
         owners: stats.owners,
         floorPriceUSD: stats.floor_price_usd,
         isSpam: stats.is_spam,
-        priceRatio: stats.floor_price_usd && stats.floor_sale_30d ? (stats.floor_price_usd / stats.floor_sale_30d).toFixed(1) + 'x' : 'N/A'
+        priceRatio: currentFloorPrice && stats.floor_sale_30d ? (currentFloorPrice / stats.floor_sale_30d).toFixed(1) + 'x' : 'N/A'
     });
     
     // Immediately reject spam collections
@@ -96,17 +97,18 @@ const isCollectionActive = (stats) => {
         return false;
     }
     
-    console.log(`✅ Floor sale activity detected: $${stats.floor_sale_30d} (30d)`);
+    console.log(`✅ Floor sale activity detected: ${stats.floor_sale_30d} crypto units (30d)`);
     
     // Check for extreme price pumps: current floor vs recent sales (100x threshold)
-    if (stats.floor_price_usd && stats.floor_sale_30d && stats.floor_price_usd > 0 && stats.floor_sale_30d > 0) {
-        const priceRatio = stats.floor_price_usd / stats.floor_sale_30d;
+    // Compare crypto currency values (both in ETH/APE, not USD)
+    if (currentFloorPrice && stats.floor_sale_30d && currentFloorPrice > 0 && stats.floor_sale_30d > 0) {
+        const priceRatio = currentFloorPrice / stats.floor_sale_30d;
         if (priceRatio > 100) {
-            console.warn(`❌ Extreme price pump detected: Current floor ($${stats.floor_price_usd.toFixed(2)}) is ${priceRatio.toFixed(1)}x higher than recent sales ($${stats.floor_sale_30d})`);
+            console.warn(`❌ Extreme price pump detected: Current floor (${currentFloorPrice} crypto) is ${priceRatio.toFixed(1)}x higher than recent sales (${stats.floor_sale_30d} crypto)`);
             console.warn(`❌ This indicates potential market manipulation or meme pricing - likely unrealistic`);
             return false;
         }
-        console.log(`💰 Price ratio check: Current floor is ${priceRatio.toFixed(1)}x recent sales (acceptable)`);
+        console.log(`💰 Price ratio check: Current floor (${currentFloorPrice}) is ${priceRatio.toFixed(1)}x recent sales (${stats.floor_sale_30d}) - acceptable`);
     }
     
     // Additional validation: Extremely high floor prices (>$100k) are suspicious
@@ -156,7 +158,8 @@ const fetchCollectionFloorPrice = async (contractAddress, network = 'ethereum', 
                 };
                 
                 // Validate collection activity - set suspicious collections to zero instead of filtering
-                const isActive = isCollectionActive(stats);
+                // Pass current floor price in crypto currency for proper comparison
+                const isActive = isCollectionActive(stats, floorPrice);
                 
                 if (!isActive) {
                     console.warn(`🚫 ${collectionName}: Suspicious collection - setting floor price to ZERO`);
