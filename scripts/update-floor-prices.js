@@ -30,29 +30,93 @@ const RATE_LIMIT_DELAY = 500; // 500ms between requests (2 requests/second)
 const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
 /**
- * Get all NFT collections from the database
+ * Get all NFT collections from the database with pagination to bypass 1000 row limit
  */
 const getAllNftCollections = async () => {
     try {
         console.log('📊 Fetching all NFT collections from database...');
         
-        const { data, error } = await supabase
-            .from('nft_collections')
-            .select('contract_address, collection_name, network, last_floor_price_update')
-            .order('collection_name');
+        let allCollections = [];
+        let from = 0;
+        const pageSize = 1000;
+        let hasMore = true;
         
-        if (error) {
-            console.error('❌ Error fetching NFT collections:', error);
-            throw error;
+        while (hasMore) {
+            console.log(`📄 Fetching page ${Math.floor(from / pageSize) + 1} (rows ${from + 1}-${from + pageSize})...`);
+            
+            const { data, error } = await supabase
+                .from('nft_collections')
+                .select('contract_address, collection_name, network, last_floor_price_update')
+                .range(from, from + pageSize - 1)
+                .order('collection_name');
+            
+            if (error) {
+                console.error('❌ Error fetching NFT collections:', error);
+                throw error;
+            }
+            
+            if (data && data.length > 0) {
+                allCollections = allCollections.concat(data);
+                console.log(`✅ Fetched ${data.length} collections (total: ${allCollections.length})`);
+                
+                // Check if we got fewer results than requested (indicates last page)
+                if (data.length < pageSize) {
+                    hasMore = false;
+                    console.log('📄 Reached last page of results');
+                } else {
+                    from += pageSize;
+                }
+            } else {
+                hasMore = false;
+                console.log('📄 No more collections to fetch');
+            }
         }
         
-        console.log(`✅ Found ${data.length} collections in database`);
-        console.log('📋 Collections found:');
-        data.forEach((collection, index) => {
-            console.log(`   ${index + 1}. ${collection.collection_name} (${collection.contract_address}) [${collection.network || 'ethereum'}]`);
+        console.log(`✅ Found ${allCollections.length} total collections in database`);
+        
+        // Add debug logging for tokengators specifically
+        console.log('\n🔍 Debugging: Searching for tokengators collections...');
+        
+        const tokengatorCollections = allCollections.filter(c => 
+            c.collection_name.toLowerCase().includes('tokengator') ||
+            c.contract_address.toLowerCase().includes('4fb7363cf6d0a546cc0ed8cc0a6c99069170a623')
+        );
+        
+        console.log(`🎯 Found ${tokengatorCollections.length} tokengators-related collections:`);
+        tokengatorCollections.forEach((collection, index) => {
+            console.log(`   ${index + 1}. Collection: "${collection.collection_name}"`);
+            console.log(`      📍 Contract: ${collection.contract_address}`);
+            console.log(`      🌐 Network: ${collection.network || 'ethereum'}`);
+            console.log(`      📅 Last Updated: ${collection.last_floor_price_update || 'Never'}`);
+            console.log('');
         });
         
-        return data;
+        if (tokengatorCollections.length === 0) {
+            console.log('❌ No tokengators collections found in database');
+            console.log('🔍 Searching for similar contracts...');
+            const similar = allCollections.filter(c => 
+                c.contract_address.toLowerCase().includes('4fb7') ||
+                c.collection_name.toLowerCase().includes('token') ||
+                c.collection_name.toLowerCase().includes('gator')
+            );
+            console.log(`Found ${similar.length} similar collections:`, similar.slice(0, 5));
+        }
+        
+        console.log('\n📋 All collections summary:');
+        console.log(`   📊 Total collections: ${allCollections.length}`);
+        console.log(`   🌐 Networks: ${[...new Set(allCollections.map(c => c.network || 'ethereum'))].join(', ')}`);
+        console.log(`   📄 Pages fetched: ${Math.ceil(allCollections.length / pageSize)}`);
+        
+        // Show first few collections as sample (instead of all 1000+)
+        console.log('\n📋 First 10 collections sample:');
+        allCollections.slice(0, 10).forEach((collection, index) => {
+            console.log(`   ${index + 1}. ${collection.collection_name} (${collection.contract_address}) [${collection.network || 'ethereum'}]`);
+        });
+        if (allCollections.length > 10) {
+            console.log(`   ... and ${allCollections.length - 10} more collections`);
+        }
+        
+        return allCollections;
         
     } catch (error) {
         console.error('❌ Failed to fetch NFT collections:', error);
