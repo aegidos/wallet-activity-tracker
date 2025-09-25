@@ -3,7 +3,7 @@ import axios from 'axios';
 import { format } from 'date-fns';
 import { ScatterChart, Scatter, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell } from 'recharts';
 import { Alchemy, Network } from 'alchemy-sdk';
-import { insertPortfolioSnapshot, insertNftCollections, getCachedFloorPrices } from '../utils/supabase';
+import { insertPortfolioSnapshot, insertNftCollections, getCachedFloorPrices, saveWatchedWallets, getWatchedWallets, deleteWatchedWallet } from '../utils/supabase';
 
 // APE Staking Contract Addressf
 const STAKING_CONTRACT = '0x4Ba2396086d52cA68a37D9C0FA364286e9c7835a';
@@ -83,6 +83,408 @@ const ZERO_ADDRESS = '0x0000000000000000000000000000000000000000';
 console.log('ALCHEMY_API_KEY:', ALCHEMY_API_KEY ? 'Set' : 'Missing');
 console.log('API_KEY:', API_KEY ? 'Set' : 'Missing');
 
+// Watch Component for managing wallet watchlist
+const WatchComponent = ({ account, connectedAccount, analyzedWallet, screenSize, setAnalyzedWallet, setActiveTab, setCurrentView }) => {
+    const [watchedWallets, setWatchedWallets] = useState([{ address: '', label: '' }]);
+    const [loading, setLoading] = useState(false);
+    const [error, setError] = useState(null);
+    const [success, setSuccess] = useState(null);
+
+    // Load existing watched wallets on component mount
+    useEffect(() => {
+        if (connectedAccount) {
+            loadWatchedWallets();
+        }
+    }, [connectedAccount]);
+
+    const loadWatchedWallets = async () => {
+        setLoading(true);
+        try {
+            const result = await getWatchedWallets(connectedAccount);
+            if (result.success) {
+                const walletData = result.data.map(item => ({
+                    address: item.watched_address,
+                    label: item.label || ''
+                }));
+                setWatchedWallets(walletData.length > 0 ? walletData : [{ address: '', label: '' }]);
+            } else {
+                console.error('Failed to load watchlist:', result.error);
+                setWatchedWallets([{ address: '', label: '' }]); // Default to empty field
+            }
+        } catch (err) {
+            console.error('Error loading watchlist:', err);
+            setWatchedWallets([{ address: '', label: '' }]); // Default to empty field
+        } finally {
+            setLoading(false);
+        }
+    };
+
+    const addWalletField = () => {
+        if (watchedWallets.length < 10) {
+            setWatchedWallets([...watchedWallets, { address: '', label: '' }]);
+        }
+    };
+
+    const removeWalletField = (index) => {
+        if (watchedWallets.length > 1) {
+            const newWallets = watchedWallets.filter((_, i) => i !== index);
+            setWatchedWallets(newWallets);
+        }
+    };
+
+    const updateWalletAddress = (index, value) => {
+        const newWallets = [...watchedWallets];
+        newWallets[index] = { ...newWallets[index], address: value };
+        setWatchedWallets(newWallets);
+        setError(null);
+        setSuccess(null);
+    };
+
+    const updateWalletLabel = (index, value) => {
+        const newWallets = [...watchedWallets];
+        newWallets[index] = { ...newWallets[index], label: value };
+        setWatchedWallets(newWallets);
+        setError(null);
+        setSuccess(null);
+    };
+
+    const validateAddress = (address) => {
+        return /^0x[a-fA-F0-9]{40}$/.test(address.trim());
+    };
+
+    const saveWatchList = async () => {
+        setLoading(true);
+        setError(null);
+        setSuccess(null);
+
+        try {
+            // Filter out empty addresses and validate
+            const validWallets = watchedWallets
+                .filter(wallet => wallet.address.trim() !== '');
+
+            // Validate all addresses
+            const invalidAddresses = validWallets
+                .filter(wallet => !validateAddress(wallet.address))
+                .map(wallet => wallet.address);
+            
+            if (invalidAddresses.length > 0) {
+                throw new Error(`Invalid wallet addresses: ${invalidAddresses.join(', ')}`);
+            }
+
+            if (validWallets.length === 0) {
+                throw new Error('Please add at least one wallet address');
+            }
+
+            // Prepare data for Supabase (convert to the format expected by saveWatchedWallets)
+            const walletsWithLabels = validWallets.map(wallet => ({
+                address: wallet.address.trim(),
+                label: wallet.label.trim() || null
+            }));
+
+            // Save to Supabase
+            const result = await saveWatchedWallets(connectedAccount, walletsWithLabels);
+            
+            if (result.success) {
+                setSuccess(`Successfully saved ${validWallets.length} wallet(s) to your watchlist!`);
+            } else {
+                throw new Error(result.error || 'Failed to save watchlist');
+            }
+        } catch (err) {
+            setError(err.message);
+        } finally {
+            setLoading(false);
+        }
+    };
+
+    const clearWatchList = async () => {
+        setLoading(true);
+        setError(null);
+        setSuccess(null);
+
+        try {
+            // Delete all watched wallets for this user
+            const result = await deleteWatchedWallet(connectedAccount);
+            if (result.success) {
+                setSuccess('Watchlist cleared successfully!');
+                setWatchedWallets([{ address: '', label: '' }]); // Reset to single empty field
+            } else {
+                setError('Failed to clear watchlist: ' + result.error);
+            }
+        } catch (err) {
+            setError('Failed to clear watchlist: ' + err.message);
+        } finally {
+            setLoading(false);
+        }
+    };
+
+    return (
+        <div style={{
+            maxWidth: '800px',
+            margin: '0 auto',
+            padding: '20px',
+            color: '#ffffff'
+        }}>
+            <div style={{
+                background: 'linear-gradient(135deg, #1a1a2e 0%, #16213e 50%, #0f0f23 100%)',
+                borderRadius: '12px',
+                padding: '24px',
+                border: '1px solid rgba(31, 81, 255, 0.3)',
+                boxShadow: '0 8px 24px rgba(0, 0, 0, 0.3)'
+            }}>
+                <h2 style={{
+                    color: '#ffffff',
+                    fontSize: '1.8rem',
+                    fontWeight: '600',
+                    marginBottom: '8px',
+                    textAlign: 'center'
+                }}>
+                    Wallet Watchlist
+                </h2>
+
+                {/* Current Analyzed Wallet Indicator */}
+                <div style={{
+                    background: 'rgba(59, 130, 246, 0.1)',
+                    border: '1px solid rgba(59, 130, 246, 0.3)',
+                    borderRadius: '8px',
+                    padding: '12px',
+                    marginBottom: '16px',
+                    textAlign: 'center'
+                }}>
+                    <p style={{
+                        color: '#60a5fa',
+                        fontSize: '0.9rem',
+                        margin: '0',
+                        fontWeight: '500'
+                    }}>
+                        🔍 Currently Analyzing: {analyzedWallet === connectedAccount ? 'Your Wallet' : `${analyzedWallet?.slice(0, 6)}...${analyzedWallet?.slice(-4)}`}
+                    </p>
+                </div>
+                
+                <p style={{
+                    color: '#9ca3af',
+                    textAlign: 'center',
+                    marginBottom: '24px',
+                    fontSize: '0.9rem'
+                }}>
+                    Add up to 10 wallet addresses to your watchlist. You can monitor and analyze these wallets anytime.
+                </p>
+
+                {/* Wallet Input Fields */}
+                <div style={{ marginBottom: '24px' }}>
+                    {watchedWallets.map((wallet, index) => (
+                        <div key={index} style={{
+                            display: 'flex',
+                            gap: '8px',
+                            alignItems: 'flex-start',
+                            marginBottom: '16px',
+                            padding: '12px',
+                            background: 'rgba(31, 41, 55, 0.5)',
+                            borderRadius: '8px',
+                            border: '1px solid rgba(55, 65, 81, 0.5)'
+                        }}>
+                            <span style={{
+                                color: '#60a5fa',
+                                fontSize: '0.8rem',
+                                fontWeight: '500',
+                                minWidth: '20px',
+                                marginTop: '12px'
+                            }}>
+                                {index + 1}.
+                            </span>
+                            <div style={{ flex: 1 }}>
+                                {/* Label Input */}
+                                <input
+                                    type="text"
+                                    value={wallet.label}
+                                    onChange={(e) => updateWalletLabel(index, e.target.value)}
+                                    placeholder="Label (e.g., 'John's Wallet', 'Trading Account')"
+                                    style={{
+                                        width: '100%',
+                                        padding: '10px 12px',
+                                        background: '#1f2937',
+                                        border: '1px solid #374151',
+                                        borderRadius: '6px',
+                                        color: '#ffffff',
+                                        fontSize: '0.85rem',
+                                        fontFamily: 'system-ui, -apple-system, sans-serif',
+                                        marginBottom: '8px'
+                                    }}
+                                />
+                                {/* Address Input */}
+                                <input
+                                    type="text"
+                                    value={wallet.address}
+                                    onChange={(e) => updateWalletAddress(index, e.target.value)}
+                                    placeholder="0x... (Enter wallet address)"
+                                    style={{
+                                        width: '100%',
+                                        padding: '10px 12px',
+                                        background: '#1f2937',
+                                        border: '1px solid #374151',
+                                        borderRadius: '6px',
+                                        color: '#ffffff',
+                                        fontSize: '0.85rem',
+                                        fontFamily: 'Monaco, Menlo, monospace'
+                                    }}
+                                />
+                            </div>
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                                {/* GO Button - only show if wallet address is valid */}
+                                {wallet.address.trim() && (
+                                    <button
+                                        onClick={() => {
+                                            setAnalyzedWallet(wallet.address.trim());
+                                            setActiveTab('Portfolio');
+                                            setCurrentView('analysis');
+                                        }}
+                                        style={{
+                                            background: 'rgba(59, 130, 246, 0.4)',
+                                            color: '#ffffff',
+                                            border: 'none',
+                                            borderRadius: '6px',
+                                            padding: '8px 12px',
+                                            cursor: 'pointer',
+                                            fontSize: '0.8rem',
+                                            fontWeight: '500'
+                                        }}
+                                    >
+                                        🔄 GO
+                                    </button>
+                                )}
+                                {watchedWallets.length > 1 && (
+                                    <button
+                                        onClick={() => removeWalletField(index)}
+                                        style={{
+                                            background: 'rgba(239, 68, 68, 0.4)',
+                                            color: '#ffffff',
+                                            border: 'none',
+                                            borderRadius: '6px',
+                                            padding: '8px 12px',
+                                            cursor: 'pointer',
+                                            fontSize: '0.8rem'
+                                        }}
+                                    >
+                                        ❌
+                                    </button>
+                                )}
+                            </div>
+                        </div>
+                    ))}
+                </div>
+
+                {/* Action Buttons */}
+                <div style={{
+                    display: 'flex',
+                    gap: '12px',
+                    justifyContent: 'center',
+                    flexWrap: 'wrap'
+                }}>
+                    {watchedWallets.length < 10 && (
+                        <button
+                            onClick={addWalletField}
+                            style={{
+                                background: 'rgba(34, 197, 94, 0.4)',
+                                color: '#ffffff',
+                                border: '1px solid rgba(34, 197, 94, 0.3)',
+                                padding: '12px 20px',
+                                borderRadius: '8px',
+                                cursor: 'pointer',
+                                fontSize: '0.9rem',
+                                fontWeight: '500'
+                            }}
+                        >
+                            ➕ Add Wallet
+                        </button>
+                    )}
+                    
+                    <button
+                        onClick={saveWatchList}
+                        disabled={loading}
+                        style={{
+                            background: loading ? 'rgba(107, 114, 128, 0.4)' : 'rgba(31, 81, 255, 0.4)',
+                            color: '#ffffff',
+                            border: '1px solid rgba(31, 81, 255, 0.3)',
+                            padding: '12px 20px',
+                            borderRadius: '8px',
+                            cursor: loading ? 'not-allowed' : 'pointer',
+                            fontSize: '0.9rem',
+                            fontWeight: '500'
+                        }}
+                    >
+                        {loading ? '💾 Saving...' : '💾 Save Watchlist'}
+                    </button>
+
+                    <button
+                        onClick={clearWatchList}
+                        disabled={loading}
+                        style={{
+                            background: loading ? 'rgba(107, 114, 128, 0.4)' : 'rgba(239, 68, 68, 0.4)',
+                            color: '#ffffff',
+                            border: '1px solid rgba(239, 68, 68, 0.3)',
+                            padding: '12px 20px',
+                            borderRadius: '8px',
+                            cursor: loading ? 'not-allowed' : 'pointer',
+                            fontSize: '0.9rem',
+                            fontWeight: '500'
+                        }}
+                    >
+                        {loading ? '🗑️ Clearing...' : '🗑️ Clear Watchlist'}
+                    </button>
+
+                    <button
+                        onClick={() => {
+                            setAnalyzedWallet(connectedAccount);
+                            setActiveTab('Portfolio');
+                            setCurrentView('analysis');
+                        }}
+                        style={{
+                            background: 'rgba(156, 163, 175, 0.4)',
+                            color: '#ffffff',
+                            border: '1px solid rgba(156, 163, 175, 0.3)',
+                            padding: '12px 20px',
+                            borderRadius: '8px',
+                            cursor: 'pointer',
+                            fontSize: '0.9rem',
+                            fontWeight: '500'
+                        }}
+                    >
+                        🔄 Reset to My Wallet
+                    </button>
+                </div>
+
+                {/* Messages */}
+                {error && (
+                    <div style={{
+                        background: 'rgba(239, 68, 68, 0.1)',
+                        border: '1px solid rgba(239, 68, 68, 0.3)',
+                        borderRadius: '8px',
+                        padding: '12px',
+                        marginTop: '16px',
+                        color: '#f87171',
+                        fontSize: '0.9rem'
+                    }}>
+                        ⚠️ {error}
+                    </div>
+                )}
+
+                {success && (
+                    <div style={{
+                        background: 'rgba(34, 197, 94, 0.1)',
+                        border: '1px solid rgba(34, 197, 94, 0.3)',
+                        borderRadius: '8px',
+                        padding: '12px',
+                        marginTop: '16px',
+                        color: '#4ade80',
+                        fontSize: '0.9rem'
+                    }}>
+                        ✅ {success}
+                    </div>
+                )}
+            </div>
+        </div>
+    );
+};
+
 // Initialize Alchemy SDK for all supported networks
 const initializeAlchemySDK = (network) => {
     let alchemyNetwork;
@@ -147,6 +549,12 @@ async function requestAccounts() {
 }
 
 function WalletAnalyzer({ account, connectedAccount, onDisconnect, onClearAnalysis }) {
+    const [analyzedWallet, setAnalyzedWallet] = useState(account);
+
+    useEffect(() => {
+        setAnalyzedWallet(account);
+    }, [account]);
+
     const [transactions, setTransactions] = useState([]);
     const [analysis, setAnalysis] = useState(null);
     const [loading, setLoading] = useState(false);
@@ -194,6 +602,9 @@ function WalletAnalyzer({ account, connectedAccount, onDisconnect, onClearAnalys
 
     // Navigation state for header menu
     const [activeTab, setActiveTab] = useState('Portfolio');
+    
+    // View state for switching between analysis and watch views
+    const [currentView, setCurrentView] = useState('analysis'); // 'analysis' or 'watch'
     
     // Screen size state for responsive design
     const [screenSize, setScreenSize] = useState({
@@ -343,21 +754,21 @@ function WalletAnalyzer({ account, connectedAccount, onDisconnect, onClearAnalys
             const solanaAlchemy = initializeAlchemySDK('solana');
 
             // Fetch ETH balance on Ethereum
-            const ethBalance = await ethereumAlchemy.core.getBalance(account);
+            const ethBalance = await ethereumAlchemy.core.getBalance(analyzedWallet);
             const ethBalanceFormatted = parseFloat(ethBalance.toString()) / 1e18;
 
             // Fetch APE balance on ApeChain
-            const apeBalance = await apechainAlchemy.core.getBalance(account);
+            const apeBalance = await apechainAlchemy.core.getBalance(analyzedWallet);
             const apeBalanceFormatted = parseFloat(apeBalance.toString()) / 1e18;
 
             // Fetch BNB balance on BNB Chain
-            const bnbBalance = await bnbAlchemy.core.getBalance(account);
+            const bnbBalance = await bnbAlchemy.core.getBalance(analyzedWallet);
             const bnbBalanceFormatted = parseFloat(bnbBalance.toString()) / 1e18;
 
             // Fetch SOL balance on Solana (note: SOL uses different decimals - 9 instead of 18)
             let solBalanceFormatted = 0;
             try {
-                const solBalance = await solanaAlchemy.core.getBalance(account);
+                const solBalance = await solanaAlchemy.core.getBalance(analyzedWallet);
                 solBalanceFormatted = parseFloat(solBalance.toString()) / 1e9;
             } catch (solanaError) {
                 console.warn('Failed to fetch SOL balance:', solanaError.message);
@@ -437,7 +848,7 @@ function WalletAnalyzer({ account, connectedAccount, onDisconnect, onClearAnalys
 
     // Fetch token balances for both networks
     const fetchTokenBalances = async () => {
-        if (!account) return;
+        if (!analyzedWallet) return;
 
         setLoading(true);
         try {
@@ -463,7 +874,7 @@ function WalletAnalyzer({ account, connectedAccount, onDisconnect, onClearAnalys
                         requestOptions.pageKey = pageKey;
                     }
                     
-                    const tokenBalances = await alchemySDK.core.getTokenBalances(account, requestOptions);
+                    const tokenBalances = await alchemySDK.core.getTokenBalances(analyzedWallet, requestOptions);
                     
                     console.log(`📈 Page ${pageCount}: Found ${tokenBalances.tokenBalances.length} tokens on ${networkName}`);
                     
@@ -523,7 +934,7 @@ function WalletAnalyzer({ account, connectedAccount, onDisconnect, onClearAnalys
                             requestOptions.pageKey = pageKey;
                         }
                         
-                        const tokenBalances = await solanaAlchemy.core.getTokenBalances(account, requestOptions);
+                        const tokenBalances = await solanaAlchemy.core.getTokenBalances(analyzedWallet, requestOptions);
                         
                         console.log(`📈 Page ${pageCount}: Found ${tokenBalances.tokenBalances.length} tokens on Solana`);
                         
@@ -869,10 +1280,10 @@ function WalletAnalyzer({ account, connectedAccount, onDisconnect, onClearAnalys
 
     // NFT Portfolio Functions
     const fetchNftPortfolio = async () => {
-        if (!account) return;
+        if (!analyzedWallet) return;
 
         try {
-            console.log('🖼️ Fetching NFT portfolio from multiple networks for:', account);
+            console.log('🖼️ Fetching NFT portfolio from multiple networks for:', analyzedWallet);
             
             // Networks to check for NFTs
             const networks = [
@@ -908,7 +1319,7 @@ function WalletAnalyzer({ account, connectedAccount, onDisconnect, onClearAnalys
                             requestOptions.pageKey = pageKey;
                         }
                         
-                        const nftsResponse = await alchemySDK.nft.getNftsForOwner(account, requestOptions);
+                        const nftsResponse = await alchemySDK.nft.getNftsForOwner(analyzedWallet, requestOptions);
                         
                         console.log(`📊 Page ${pageCount}: Found ${nftsResponse.ownedNfts.length} NFTs on ${network.displayName}`);
                         
@@ -1298,18 +1709,18 @@ function WalletAnalyzer({ account, connectedAccount, onDisconnect, onClearAnalys
         };
     }, []);
 
-    // Fetch token balances and NFT portfolio when account changes
+    // Fetch token balances and NFT portfolio when analyzed wallet changes
     useEffect(() => {
         setTokenDataLoaded(false); // Reset loading state
         fetchTokenBalances();
         fetchNftPortfolio();
-    }, [account]);
+    }, [analyzedWallet]);
 
     useEffect(() => {
-        if (account) {
+        if (analyzedWallet) {
             fetchWalletData();
         }
-    }, [account]);
+    }, [analyzedWallet]);
 
     // Callback to collect network totals from TokenBalanceDisplay components
     const handleNetworkTotal = React.useCallback((network) => {
@@ -1353,18 +1764,18 @@ function WalletAnalyzer({ account, connectedAccount, onDisconnect, onClearAnalys
             
             // Only insert portfolio snapshot if NFT data is complete
             // This prevents saving incomplete snapshots when NFTs exist but floor prices haven't been fetched yet
-            if (account && nftDataComplete) {
+            if (analyzedWallet && nftDataComplete) {
                 console.log(`📊 Saving portfolio snapshot (NFTs: ${hasNFTs ? `${nftPortfolio.length} with $${totalNftValueUSD.toFixed(2)} value` : 'none'})`);
-            } else if (account && !nftDataComplete) {
+            } else if (analyzedWallet && !nftDataComplete) {
                 console.log(`⏳ Skipping portfolio snapshot - waiting for NFT floor prices to load (${nftPortfolio.length} NFTs with $0 value)`);
                 return; // Exit early, don't save incomplete data
             }
             
             // Insert portfolio snapshot into Supabase (non-blocking)
-            if (account && nftDataComplete) {
+            if (analyzedWallet && nftDataComplete) {
                 setTimeout(async () => {
                     try {
-                        await insertPortfolioSnapshot(account, {
+                        await insertPortfolioSnapshot(analyzedWallet, {
                             totalValue: newPortfolioTotal,
                             tokenBalance: newPortfolioTotal - stakedAPEValue - totalNftValueUSD,
                             nativeBalance: Object.entries(networkTotals).reduce((sum, [network, total]) => {
@@ -1389,7 +1800,7 @@ function WalletAnalyzer({ account, connectedAccount, onDisconnect, onClearAnalys
                 }, 100);
             }
         }
-    }, [stakedAPEAmount, tokenPrices, networkTotals, totalNftValueUSD, account, analysis, nativeBalances, nftPortfolio]);
+    }, [stakedAPEAmount, tokenPrices, networkTotals, totalNftValueUSD, analyzedWallet, analysis, nativeBalances, nftPortfolio]);
 
     // Recalculate NFT portfolio value when NFT data, floor prices, or ETH price changes
     useEffect(() => {
@@ -1611,7 +2022,7 @@ function WalletAnalyzer({ account, connectedAccount, onDisconnect, onClearAnalys
             try {
                 console.log(`Fetching ${action} (attempt ${attempt}/${maxRetries})...`);
                 
-                const url = `${BASE_URL}&module=account&action=${action}&address=${account}&startblock=0&endblock=99999999&sort=asc&apikey=${API_KEY}`;
+                const url = `${BASE_URL}&module=account&action=${action}&address=${analyzedWallet}&startblock=0&endblock=99999999&sort=asc&apikey=${API_KEY}`;
                 console.log(`Request URL: ${url}`);
                 
                 const response = await axios.get(url, {
@@ -1713,7 +2124,7 @@ function WalletAnalyzer({ account, connectedAccount, onDisconnect, onClearAnalys
 
         try {
             console.log('=== STARTING SEQUENTIAL WALLET DATA FETCH ===');
-            console.log('Account:', account);
+            console.log('Analyzed Wallet:', analyzedWallet);
             console.log('Include Staking:', includeStaking);
             console.log('API Key (first 8 chars):', API_KEY.substring(0, 8) + '...');
             console.log('Alchemy API Key:', process.env.NEXT_PUBLIC_ALCHEMY_API_KEY);
@@ -3614,7 +4025,7 @@ function WalletAnalyzer({ account, connectedAccount, onDisconnect, onClearAnalys
             console.log('🔍 Fetching staking rewards from internal transactions...');
             
             // Fetch internal transactions specifically for staking detection
-            const internalStakingUrl = `${BASE_URL}&module=account&action=txlistinternal&address=${account}&startblock=0&endblock=99999999&sort=desc&apikey=${API_KEY}`;
+            const internalStakingUrl = `${BASE_URL}&module=account&action=txlistinternal&address=${analyzedWallet}&startblock=0&endblock=99999999&sort=desc&apikey=${API_KEY}`;
             const response = await axios.get(internalStakingUrl, { timeout: 30000 });
             
             if (response.data.status === '1' && Array.isArray(response.data.result)) {
@@ -4131,6 +4542,42 @@ function WalletAnalyzer({ account, connectedAccount, onDisconnect, onClearAnalys
                         alignItems: 'center',
                         gap: screenSize.isMobile ? '0.5rem' : '0.75rem'
                     }}>
+                        {/* Watch button */}
+                        <button
+                            onClick={() => setCurrentView('watch')}
+                            style={{
+                                background: currentView === 'watch' ? 'linear-gradient(135deg, rgba(31, 81, 255, 0.8) 0%, rgba(31, 81, 255, 0.6) 100%)' : 'transparent',
+                                color: currentView === 'watch' ? '#FFFFFF' : '#e0e0e0',
+                                border: '1px solid',
+                                borderColor: currentView === 'watch' ? 'rgba(31, 81, 255, 0.3)' : 'rgba(255, 255, 255, 0.1)',
+                                padding: screenSize.isMobile ? '0.4rem 0.6rem' : '0.5rem 0.8rem',
+                                borderRadius: '8px',
+                                cursor: 'pointer',
+                                fontSize: screenSize.isMobile ? '0.7rem' : '0.8rem',
+                                fontWeight: currentView === 'watch' ? '600' : '500',
+                                transition: 'all 0.2s ease',
+                                whiteSpace: 'nowrap',
+                                boxShadow: currentView === 'watch' ? '0 0 10px rgba(31, 81, 255, 0.3)' : 'none',
+                                textShadow: currentView === 'watch' ? '0 0 8px rgba(31, 81, 255, 0.3)' : 'none'
+                            }}
+                            onMouseEnter={(e) => {
+                                if (currentView !== 'watch') {
+                                    e.target.style.background = 'linear-gradient(135deg, rgba(31, 81, 255, 0.8) 0%, rgba(31, 81, 255, 0.6) 100%)';
+                                    e.target.style.color = '#FFFFFF';
+                                    e.target.style.borderColor = 'rgba(31, 81, 255, 0.3)';
+                                }
+                            }}
+                            onMouseLeave={(e) => {
+                                if (currentView !== 'watch') {
+                                    e.target.style.background = 'transparent';
+                                    e.target.style.color = '#e0e0e0';
+                                    e.target.style.borderColor = 'rgba(255, 255, 255, 0.1)';
+                                }
+                            }}
+                        >
+                            {screenSize.isMobile ? 'WATCH' : 'WATCH'}
+                        </button>
+                        
                         {/* Disconnect button - only show if there's a connected wallet */}
                         {connectedAccount && onDisconnect && (
                             <button
@@ -4154,7 +4601,7 @@ function WalletAnalyzer({ account, connectedAccount, onDisconnect, onClearAnalys
                                     e.target.style.background = 'rgba(239, 68, 68, 0.8)';
                                 }}
                             >
-                                {screenSize.isMobile ? '🔌' : '🔌 Disconnect'}
+                                {screenSize.isMobile ? '🔌' : 'Disconnect'}
                             </button>
                         )}
                         
@@ -4163,9 +4610,9 @@ function WalletAnalyzer({ account, connectedAccount, onDisconnect, onClearAnalys
                             <button
                                 onClick={onClearAnalysis}
                                 style={{
-                                    background: 'rgba(31, 81, 255, 0.8)',
-                                    color: '#FFFFFF',
-                                    border: '1px solid rgba(31, 81, 255, 0.3)',
+                                    background: 'transparent',
+                                    color: '#e0e0e0',
+                                    border: '1px solid rgba(255, 255, 255, 0.1)',
                                     padding: screenSize.isMobile ? '0.4rem 0.6rem' : '0.5rem 0.8rem',
                                     borderRadius: '8px',
                                     cursor: 'pointer',
@@ -4175,10 +4622,14 @@ function WalletAnalyzer({ account, connectedAccount, onDisconnect, onClearAnalys
                                     whiteSpace: 'nowrap'
                                 }}
                                 onMouseEnter={(e) => {
-                                    e.target.style.background = 'rgba(31, 81, 255, 1)';
+                                    e.target.style.background = 'linear-gradient(135deg, rgba(31, 81, 255, 0.8) 0%, rgba(31, 81, 255, 0.6) 100%)';
+                                    e.target.style.color = '#FFFFFF';
+                                    e.target.style.borderColor = 'rgba(31, 81, 255, 0.3)';
                                 }}
                                 onMouseLeave={(e) => {
-                                    e.target.style.background = 'rgba(31, 81, 255, 0.8)';
+                                    e.target.style.background = 'transparent';
+                                    e.target.style.color = '#e0e0e0';
+                                    e.target.style.borderColor = 'rgba(255, 255, 255, 0.1)';
                                 }}
                             >
                                 {screenSize.isMobile ? '🔄' : '🔄 New Wallet'}
@@ -4195,7 +4646,20 @@ function WalletAnalyzer({ account, connectedAccount, onDisconnect, onClearAnalys
                 minHeight: '100vh'
             }}>
 
-            {/* Loading Content */}
+            {/* Conditional Content Based on Current View */}
+            {currentView === 'watch' ? (
+                <WatchComponent
+                    account={account}
+                    connectedAccount={connectedAccount}
+                    analyzedWallet={analyzedWallet}
+                    screenSize={screenSize}
+                    setAnalyzedWallet={setAnalyzedWallet}
+                    setActiveTab={setActiveTab}
+                    setCurrentView={setCurrentView}
+                />
+            ) : (
+                <>
+                {/* Loading Content */}
             {showLoadingContent && (
                 <div style={{
                     textAlign: 'center',
@@ -5062,6 +5526,8 @@ function WalletAnalyzer({ account, connectedAccount, onDisconnect, onClearAnalys
             </div>
             )}
 
+                </>
+            )}
             </div> {/* Close Main Content Wrapper */}
             
             {/* Footer Navigation Menu */}
@@ -5089,7 +5555,10 @@ function WalletAnalyzer({ account, connectedAccount, onDisconnect, onClearAnalys
                     {['Portfolio', 'Tokens', 'NFTs', 'Transactions'].map((tab) => (
                         <button
                             key={tab}
-                            onClick={() => setActiveTab(tab)}
+                            onClick={() => {
+                                setActiveTab(tab);
+                                setCurrentView('analysis');
+                            }}
                             style={{
                                 background: activeTab === tab ? 'linear-gradient(135deg, rgba(31, 81, 255, 0.8) 0%, rgba(31, 81, 255, 0.6) 100%)' : 'transparent',
                                 color: activeTab === tab ? '#FFFFFF' : '#e0e0e0',

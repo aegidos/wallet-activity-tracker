@@ -69,7 +69,8 @@ const isCollectionActive = (stats) => {
         floorSale30d: stats.floor_sale_30d,
         owners: stats.owners,
         floorPriceUSD: stats.floor_price_usd,
-        isSpam: stats.is_spam
+        isSpam: stats.is_spam,
+        priceRatio: stats.floor_price_usd && stats.floor_sale_30d ? (stats.floor_price_usd / stats.floor_sale_30d).toFixed(1) + 'x' : 'N/A'
     });
     
     // Immediately reject spam collections
@@ -96,6 +97,17 @@ const isCollectionActive = (stats) => {
     }
     
     console.log(`✅ Floor sale activity detected: $${stats.floor_sale_30d} (30d)`);
+    
+    // Check for extreme price pumps: current floor vs recent sales (100x threshold)
+    if (stats.floor_price_usd && stats.floor_sale_30d && stats.floor_price_usd > 0 && stats.floor_sale_30d > 0) {
+        const priceRatio = stats.floor_price_usd / stats.floor_sale_30d;
+        if (priceRatio > 100) {
+            console.warn(`❌ Extreme price pump detected: Current floor ($${stats.floor_price_usd.toFixed(2)}) is ${priceRatio.toFixed(1)}x higher than recent sales ($${stats.floor_sale_30d})`);
+            console.warn(`❌ This indicates potential market manipulation or meme pricing - likely unrealistic`);
+            return false;
+        }
+        console.log(`💰 Price ratio check: Current floor is ${priceRatio.toFixed(1)}x recent sales (acceptable)`);
+    }
     
     // Additional validation: Extremely high floor prices (>$100k) are suspicious
     if (stats.floor_price_usd && stats.floor_price_usd > 100000) {
@@ -246,7 +258,7 @@ const fetchMultipleFloorPrices = async (collections) => {
     console.log(`   🔍 Data retrieval rate: ${((results.length / collections.length) * 100).toFixed(1)}%`);
     console.log(`   🕒 Total API requests: ${requestCount}`);
     console.log(`   ⚡ Rate limit: 2 requests/second`);
-    console.log(`   �️ Moon price protection: Active\n`);
+    console.log(`   🛡️ Moon price protection: Active (100x pump threshold)\n`);
     
     if (suspicious.length > 0) {
         console.log(`🚫 Suspicious Collections (Floor Price Set to $0):`);
@@ -409,8 +421,8 @@ async function main() {
         console.log(`   ❌ Database updates failed: ${updateResults.failed}`);
         console.log(`   🌐 Total API requests: ${requestCount}`);
         console.log(`   ⚡ Average request time: ${(executionTime / requestCount).toFixed(0)}ms`);
-        console.log(`   🛡️ Moon price protection: ACTIVE (suspicious collections set to $0)`);
-        console.log(`   📊 Quality assurance: Portfolio protection from inflated valuations`);
+        console.log(`   🛡️ Moon price protection: ACTIVE (100x pump threshold + suspicious collections set to $0)`);
+        console.log(`   📊 Quality assurance: Portfolio protection from extreme price manipulation`);
         console.log(`   📅 Completed at: ${new Date().toISOString()}`);
         
         // Log recommendations based on results

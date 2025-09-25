@@ -266,3 +266,126 @@ export const getCachedFloorPrices = async (contractAddresses) => {
         return {};
     }
 };
+
+// Watchlist functionality
+// Expected Supabase table: watched_wallets
+// Columns: id (uuid, primary key), user_wallet (text), watched_address (text), 
+//          label (text, optional), created_at (timestamptz), updated_at (timestamptz)
+
+export const saveWatchedWallets = async (userWallet, watchedWallets) => {
+    if (!supabase) {
+        console.error('❌ Supabase client not initialized - cannot save watched wallets');
+        return { success: false, error: 'Database not available' };
+    }
+
+    try {
+        console.log('💾 Saving watched wallets:', { userWallet, count: watchedWallets.length });
+
+        // First, delete existing watched wallets for this user
+        const { error: deleteError } = await supabase
+            .from('watched_wallets')
+            .delete()
+            .eq('user_wallet', userWallet);
+
+        if (deleteError) {
+            console.error('❌ Error deleting existing watched wallets:', deleteError);
+            return { success: false, error: deleteError.message };
+        }
+
+        // Insert new watched wallets - handle both old format (strings) and new format (objects)
+        const watchlistData = watchedWallets.map(wallet => {
+            // Support both old format (string addresses) and new format (objects with address/label)
+            if (typeof wallet === 'string') {
+                return {
+                    user_wallet: userWallet,
+                    watched_address: wallet.toLowerCase(),
+                    label: null,
+                    created_at: new Date().toISOString(),
+                    updated_at: new Date().toISOString()
+                };
+            } else {
+                return {
+                    user_wallet: userWallet,
+                    watched_address: wallet.address.toLowerCase(),
+                    label: wallet.label || null,
+                    created_at: new Date().toISOString(),
+                    updated_at: new Date().toISOString()
+                };
+            }
+        });
+
+        const { data, error } = await supabase
+            .from('watched_wallets')
+            .insert(watchlistData)
+            .select();
+
+        if (error) {
+            console.error('❌ Error saving watched wallets:', error);
+            return { success: false, error: error.message };
+        }
+
+        console.log(`✅ Successfully saved ${data.length} watched wallets`);
+        return { success: true, data };
+
+    } catch (err) {
+        console.error('❌ Unexpected error saving watched wallets:', err);
+        return { success: false, error: err.message };
+    }
+};
+
+export const getWatchedWallets = async (userWallet) => {
+    if (!supabase) {
+        console.error('❌ Supabase client not initialized - cannot get watched wallets');
+        return { success: false, error: 'Database not available' };
+    }
+
+    try {
+        console.log('📖 Loading watched wallets for user:', userWallet);
+
+        const { data, error } = await supabase
+            .from('watched_wallets')
+            .select('*')
+            .eq('user_wallet', userWallet)
+            .order('created_at', { ascending: true });
+
+        if (error) {
+            console.error('❌ Error loading watched wallets:', error);
+            return { success: false, error: error.message };
+        }
+
+        console.log(`✅ Successfully loaded ${data.length} watched wallets`);
+        return { success: true, data };
+
+    } catch (err) {
+        console.error('❌ Unexpected error loading watched wallets:', err);
+        return { success: false, error: err.message };
+    }
+};
+
+export const deleteWatchedWallet = async (userWallet) => {
+    if (!supabase) {
+        console.error('❌ Supabase client not initialized - cannot delete watched wallet');
+        return { success: false, error: 'Database not available' };
+    }
+
+    try {
+        console.log('🗑️ Deleting all watched wallets for user:', { userWallet });
+
+        const { error } = await supabase
+            .from('watched_wallets')
+            .delete()
+            .eq('user_wallet', userWallet.toLowerCase());
+
+        if (error) {
+            console.error('❌ Error deleting watched wallets:', error);
+            return { success: false, error: error.message };
+        }
+
+        console.log('✅ Successfully deleted all watched wallets for user');
+        return { success: true };
+
+    } catch (err) {
+        console.error('❌ Unexpected error deleting watched wallets:', err);
+        return { success: false, error: err.message };
+    }
+};
