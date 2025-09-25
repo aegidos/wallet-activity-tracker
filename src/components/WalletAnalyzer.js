@@ -683,6 +683,15 @@ function WalletAnalyzer({ account, connectedAccount, onDisconnect, onClearAnalys
                 console.log(`🔄 Set WETH price to match ETH: $${nativeEthPrice.toFixed(2)}`);
             }
             
+            // Special case: WAPE should have the same price as APE
+            const nativeApePrice = combinedPrices['apechain-native'];
+            if (nativeApePrice) {
+                // WAPE contract address on ApeChain
+                const wapeAddress = '0x48b62137edfa95a428d35c09e44256a739f6b557';
+                combinedPrices[wapeAddress] = nativeApePrice;
+                console.log(`🔄 Set WAPE price to match APE: $${nativeApePrice.toFixed(2)}`);
+            }
+            
             setTokenPrices(combinedPrices);
             
             console.log(`Price sources: ${Object.keys(alchemyPrices).length} from Alchemy, ${Object.keys(externalPrices).length} from external APIs, ${Object.keys(nativePrices).length} native tokens`);
@@ -1870,31 +1879,59 @@ function WalletAnalyzer({ account, connectedAccount, onDisconnect, onClearAnalys
                 
                 // ENHANCEMENT: Check if this transaction contains NFT transfers
                 if (nftByTx[tx.hash]) {
-                    // This transaction has NFT transfers, check if it should be labeled as Trade
+                    // This transaction has NFT transfers, check if it should be labeled as Trade or NFT Sale
                     const nftsInTx = nftByTx[tx.hash];
                     const userNftOut = nftsInTx.filter(nft => nft.from.toLowerCase() === account.toLowerCase());
                     const userNftIn = nftsInTx.filter(nft => nft.to.toLowerCase() === account.toLowerCase());
                     
-                    // If user is sending NFTs out (and no payment received), label as Trade
-                    if (userNftOut.length > 0 && parseInt(tx.value) === 0) {
-                        processedAsTrade.add(tx.hash); // Track this transaction
-                        transactions.push({
-                            hash: tx.hash,
-                            date: date,
-                            label: 'Trade',
-                            outgoingAsset: 'NFT',
-                            outgoingAmount: userNftOut.length.toString(),
-                            incomingAsset: '',
-                            incomingAmount: '',
-                            feeAsset: '',
-                            feeAmount: '',
-                            comment: `NFT Transfer (Out) - ${userNftOut.length} NFT(s) transferred: ${userNftOut.map(nft => `${nft.tokenName} #${nft.tokenID}`).join(', ')}`,
-                            type: 'nft',
-                            tokenId: userNftOut[0].tokenID,
-                            tokenName: userNftOut[0].tokenName,
-                            isTransfer: true
-                        });
-                        return; // Skip regular transaction processing
+                    // If user is sending NFTs out, check for payment (WAPE marketplace sales)
+                    if (userNftOut.length > 0) {
+                        // Check for WAPE/APE token receipts in this transaction
+                        let hasTokenPayment = false;
+                        let paymentAmount = 0;
+                        let paymentCurrency = 'APE';
+                        
+                        if (tokenByTx[tx.hash]) {
+                            const incomingTokens = tokenByTx[tx.hash].filter(
+                                tokenTx => tokenTx.to.toLowerCase() === account.toLowerCase() &&
+                                           (tokenTx.tokenSymbol === 'WAPE' || tokenTx.tokenSymbol === 'APE')
+                            );
+                            
+                            if (incomingTokens.length > 0) {
+                                hasTokenPayment = true;
+                                const tokenTx = incomingTokens[0];
+                                paymentCurrency = tokenTx.tokenSymbol;
+                                const tokenDecimals = parseInt(tokenTx.tokenDecimal);
+                                paymentAmount = parseInt(tokenTx.value) / Math.pow(10, tokenDecimals);
+                                console.log(`🎯 Detected WAPE marketplace sale: ${userNftOut.length} NFT(s) for ${paymentAmount} ${paymentCurrency}`);
+                            }
+                        }
+                        
+                        // If no token payment and no native APE payment, it's a transfer
+                        if (!hasTokenPayment && parseInt(tx.value) === 0) {
+                            processedAsTrade.add(tx.hash); // Track this transaction
+                            transactions.push({
+                                hash: tx.hash,
+                                date: date,
+                                label: 'Trade',
+                                outgoingAsset: 'NFT',
+                                outgoingAmount: userNftOut.length.toString(),
+                                incomingAsset: '',
+                                incomingAmount: '',
+                                feeAsset: '',
+                                feeAmount: '',
+                                comment: `NFT Transfer (Out) - ${userNftOut.length} NFT(s) transferred: ${userNftOut.map(nft => `${nft.tokenName} #${nft.tokenID}`).join(', ')}`,
+                                type: 'nft',
+                                tokenId: userNftOut[0].tokenID,
+                                tokenName: userNftOut[0].tokenName,
+                                isTransfer: true
+                            });
+                            return; // Skip regular transaction processing
+                        } else if (hasTokenPayment) {
+                            // This is a WAPE marketplace sale - let the NFT processing handle it properly
+                            console.log(`✅ WAPE marketplace sale detected - will be processed as NFT Sale by NFT handler`);
+                            // Don't add to processedAsTrade, let NFT processing handle it
+                        }
                     }
                     
                     // If user is receiving NFTs (and no payment made), label as Trade
@@ -2377,18 +2414,30 @@ function WalletAnalyzer({ account, connectedAccount, onDisconnect, onClearAnalys
                     let comment = `Token ID: ${nft.tokenID} - Collection: ${nft.tokenName}`;
                     let isTransfer = false; // Flag to detect transfers
                     
-                    // Check token transfers for this transaction
+                    // Check token transfers for this transaction (prioritize WAPE/APE tokens)
                     if (tokenByTx[txHash]) {
                         const incomingTokens = tokenByTx[txHash].filter(
                             tx => tx.to.toLowerCase() === account.toLowerCase()
                         );
                         
                         if (incomingTokens.length > 0) {
-                            // Use the first incoming token transfer as payment
-                            const tokenTx = incomingTokens[0];
+                            // Prioritize WAPE and APE tokens for marketplace sales
+                            let tokenTx = incomingTokens.find(tx => 
+                                tx.tokenSymbol === 'WAPE' || tx.tokenSymbol === 'APE'
+                            );
+                            
+                            // If no WAPE/APE found, use the first incoming token
+                            if (!tokenTx) {
+                                tokenTx = incomingTokens[0];
+                            }
+                            
                             paymentCurrency = tokenTx.tokenSymbol;
                             const tokenDecimals = parseInt(tokenTx.tokenDecimal);
                             paymentAmount = parseInt(tokenTx.value) / Math.pow(10, tokenDecimals);
+                            
+                            if (tokenTx.tokenSymbol === 'WAPE') {
+                                console.log(`💰 WAPE marketplace payment detected: ${paymentAmount} WAPE for NFT ${nft.tokenName} #${nft.tokenID}`);
+                            }
                         }
                     }
                     
@@ -2423,7 +2472,7 @@ function WalletAnalyzer({ account, connectedAccount, onDisconnect, onClearAnalys
                         }
                     }
                     
-                    // **NEW LOGIC**: Check if this is a transfer (no payment received)
+                    // **ENHANCED LOGIC**: Check if this is a transfer (no payment received)
                     if (paymentAmount === null || paymentAmount === 0) {
                         // This is a transfer, not a sale
                         label = 'Transfer';
@@ -2432,11 +2481,17 @@ function WalletAnalyzer({ account, connectedAccount, onDisconnect, onClearAnalys
                         comment = `Token ID: ${nft.tokenID} - Collection: ${nft.tokenName} - NFT Transfer (Out) - Transfer to another wallet, no payment received`;
                         isTransfer = true;
                     } else {
-                        // This is a real sale with payment
+                        // This is a real sale with payment (including WAPE marketplace sales)
+                        label = 'NFT Sale';
                         if (paymentCurrency) {
                             incomingAsset = paymentCurrency;
                         }
                         incomingAmount = paymentAmount.toString();
+                        
+                        // Update comment for WAPE marketplace sales
+                        if (paymentCurrency === 'WAPE') {
+                            comment = `Token ID: ${nft.tokenID} - Collection: ${nft.tokenName} (WAPE Marketplace Sale)`;
+                        }
                     }
                     
                     transactions.push({
