@@ -1724,7 +1724,61 @@ function WalletAnalyzer({ account, connectedAccount, onDisconnect, onClearAnalys
 
     // Fetch token balances and NFT portfolio when analyzed wallet changes
     useEffect(() => {
-        setTokenDataLoaded(false); // Reset loading state
+        if (!analyzedWallet) return;
+        
+        // Reset all balance and data states when switching wallets
+        console.log('🔄 Wallet changed to:', analyzedWallet, '- Resetting all balances and data');
+        
+        // Reset token and balance states
+        setTokenBalances({
+            ethereum: [],
+            apechain: [],
+            bnb: [],
+            solana: []
+        });
+        
+        setNativeBalances({
+            ethereum: 0,
+            apechain: 0,
+            bnb: 0,
+            solana: 0
+        });
+        
+        // Reset price and value states
+        setTokenPrices({});
+        setTotalTokenValueUSD(0);
+        setStakedAPEAmount(0);
+        
+        // Reset NFT states
+        setNftPortfolio([]);
+        setNftFloorPrices({});
+        setTotalNftValueUSD(0);
+        setNftCollectionValues({});
+        
+        // Reset network totals
+        setNetworkTotals({
+            ethereum: 0,
+            apechain: 0,
+            bnb: 0,
+            solana: 0
+        });
+        
+        // Reset transaction and analysis states
+        setTransactions([]);
+        setAnalysis(null);
+        setStakingTransactions([]);
+        setApeChurchRewards([]);
+        setRaffleRewards([]);
+        
+        // Reset processing states
+        setTokenDataLoaded(false);
+        setProcessingComplete(false);
+        setFetchingFloorPrices(false);
+        
+        // Clear any existing errors
+        setError(null);
+        
+        // Now fetch fresh data for the new wallet
         fetchTokenBalances();
         fetchNftPortfolio();
     }, [analyzedWallet]);
