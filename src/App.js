@@ -1,4 +1,7 @@
 import React, { useState, useEffect } from 'react';
+import { GlyphWalletProvider, useGlyph, useNativeGlyphConnection } from '@use-glyph/sdk-react';
+import { apeChain } from 'viem/chains';
+import { useAccount } from 'wagmi';
 import WalletAnalyzer from './components/WalletAnalyzer';
 
 const APECHAIN_CONFIG = {
@@ -13,18 +16,61 @@ const APECHAIN_CONFIG = {
     blockExplorerUrls: ['https://apescan.io/']
 };
 
+// Main App component that includes Glyph providers
 function App() {
-    const [account, setAccount] = useState(null);
-    const [provider, setProvider] = useState(null);
+    return (
+        <GlyphWalletProvider chains={[apeChain]} askForSignature={true}>
+            <AppContent />
+        </GlyphWalletProvider>
+    );
+}
+
+// Inner component with wallet logic
+function AppContent() {
+    const { user, authenticated, ready, login, logout } = useGlyph();
+    const { connect } = useNativeGlyphConnection();
+    const { isConnected } = useAccount();
     const [isConnecting, setIsConnecting] = useState(false);
     const [error, setError] = useState(null);
     const [manualAddress, setManualAddress] = useState('');
     const [addressToAnalyze, setAddressToAnalyze] = useState(null);
+    const [selectedLinkedWallet, setSelectedLinkedWallet] = useState(null);
 
     useEffect(() => {
         checkUrlParameters();
-        checkConnection();
     }, []);
+
+    // Handle Glyph authentication
+    useEffect(() => {
+        if (ready && authenticated && user) {
+            // If user has linked wallets, default to the first linked wallet for analysis
+            if (user.linkedWallets && user.linkedWallets.length > 0) {
+                const defaultWallet = user.linkedWallets[0].address;
+                setSelectedLinkedWallet(defaultWallet);
+                
+                // Only set addressToAnalyze if there's no URL parameter (URL takes priority)
+                const urlParams = new URLSearchParams(window.location.search);
+                const walletParam = urlParams.get('wallet');
+                
+                if (!walletParam) {
+                    setAddressToAnalyze(defaultWallet);
+                    updateUrlWithWallet(defaultWallet);
+                }
+            } else {
+                // Fallback to main wallet if no linked wallets
+                const mainWallet = user.evmWallet;
+                if (mainWallet) {
+                    const urlParams = new URLSearchParams(window.location.search);
+                    const walletParam = urlParams.get('wallet');
+                    
+                    if (!walletParam) {
+                        setAddressToAnalyze(mainWallet);
+                        updateUrlWithWallet(mainWallet);
+                    }
+                }
+            }
+        }
+    }, [ready, authenticated, user]);
 
     const checkUrlParameters = () => {
         // Check if there's a wallet address in the URL
@@ -61,126 +107,32 @@ function App() {
         }
     };
 
-    const checkConnection = async () => {
-        if (typeof window.ethereum !== 'undefined') {
-            try {
-                const accounts = await window.ethereum.request({ method: 'eth_accounts' });
-                if (accounts.length > 0) {
-                    // Fixed: Don't create a new provider, just use window.ethereum directly
-                    setProvider(window.ethereum);
-                    setAccount(accounts[0]);
-                    
-                    // Only set addressToAnalyze if there's no URL parameter (URL takes priority)
-                    const urlParams = new URLSearchParams(window.location.search);
-                    const walletParam = urlParams.get('wallet');
-                    
-                    if (!walletParam) {
-                        setAddressToAnalyze(accounts[0]);
-                        updateUrlWithWallet(accounts[0]);
-                    }
-                }
-            } catch (error) {
-                console.error('Error checking connection:', error);
-            }
-        }
-    };
+
 
     const connectWallet = async () => {
-        if (typeof window.ethereum === 'undefined') {
-            setError('MetaMask is not installed. Please install MetaMask to connect your wallet.');
-            return;
-        }
-
         setIsConnecting(true);
         setError(null);
 
         try {
-            // Request account access
-            const accounts = await window.ethereum.request({ method: 'eth_requestAccounts' });
-            
-            if (accounts.length === 0) {
-                throw new Error('No accounts found');
+            if (!isConnected) {
+                // First connect the wallet
+                await connect();
             }
-
-            // Check if we're on the right network
-            const chainId = await window.ethereum.request({ method: 'eth_chainId' });
-            
-            if (chainId !== APECHAIN_CONFIG.chainId) {
-                try {
-                    await window.ethereum.request({
-                        method: 'wallet_switchEthereumChain',
-                        params: [{ chainId: APECHAIN_CONFIG.chainId }],
-                    });
-                } catch (switchError) {
-                    if (switchError.code === 4902) {
-                        try {
-                            await window.ethereum.request({
-                                method: 'wallet_addEthereumChain',
-                                params: [APECHAIN_CONFIG],
-                            });
-                        } catch (addError) {
-                            throw new Error('Failed to add ApeChain network');
-                        }
-                    } else {
-                        throw new Error('Failed to switch to ApeChain network');
-                    }
-                }
-            }
-
-            // Fixed: Use window.ethereum directly instead of creating a new provider
-            setProvider(window.ethereum);
-            setAccount(accounts[0]);
-            setAddressToAnalyze(accounts[0]);
+            // Then authenticate with Glyph
+            await login();
             setManualAddress(''); // Clear manual input when wallet connects
-            
-            // Update URL with connected wallet address
-            updateUrlWithWallet(accounts[0]);
-
-            // Add account change listener
-            window.ethereum.on('accountsChanged', handleAccountsChanged);
-            window.ethereum.on('chainChanged', handleChainChanged);
-
         } catch (error) {
-            console.error('Error connecting wallet:', error);
-            if (error.code === 4001) {
-                setError('Connection rejected by user.');
-            } else if (error.code === -32002) {
-                setError('Connection request already pending. Please check MetaMask.');
-            } else {
-                setError(error.message || 'Failed to connect wallet');
-            }
+            console.error('Error connecting to Glyph:', error);
+            setError('Failed to connect to Glyph account. Please try again.');
         } finally {
             setIsConnecting(false);
         }
     };
 
-    const handleAccountsChanged = (accounts) => {
-        if (accounts.length === 0) {
-            // User disconnected
-            disconnectWallet();
-        } else if (accounts[0] !== account) {
-            // User switched accounts
-            setAccount(accounts[0]);
-            setAddressToAnalyze(accounts[0]);
-            updateUrlWithWallet(accounts[0]);
-        }
-    };
-
-    const handleChainChanged = (chainId) => {
-        // Reload the page when chain changes (recommended by MetaMask)
-        window.location.reload();
-    };
-
     const disconnectWallet = () => {
-        // Remove event listeners
-        if (window.ethereum && window.ethereum.removeListener) {
-            window.ethereum.removeListener('accountsChanged', handleAccountsChanged);
-            window.ethereum.removeListener('chainChanged', handleChainChanged);
-        }
-        
-        setProvider(null);
-        setAccount(null);
+        logout();
         setAddressToAnalyze(null);
+        setSelectedLinkedWallet(null);
         setManualAddress('');
         setError(null);
         
@@ -220,9 +172,10 @@ function App() {
 
     const clearAnalysis = () => {
         setAddressToAnalyze(null);
+        setSelectedLinkedWallet(null);
         setManualAddress('');
-        if (!account) {
-            // Only clear if no wallet is connected
+        if (!authenticated) {
+            // Only clear if no Glyph account is connected
             setError(null);
         }
         
@@ -234,7 +187,7 @@ function App() {
 
     return (
         <div className="container">
-            <div className="header" style={{ marginBottom: '1rem' }}>
+            <div className="header">
                 <h1 style={{ 
                     marginTop: '0.5rem', 
                     marginBottom: '0.5rem', 
@@ -247,24 +200,93 @@ function App() {
 
             {!addressToAnalyze ? (
                 <div className="wallet-connect">
-                    <h2>Get Started</h2>
+                    <div style={{ height: '2rem' }}></div>
                     
                     {/* Wallet Connection Section */}
-                    <div className="connection-option">
-                        <h3>Option 1: Connect Your Wallet</h3>
-                        <p>Connect your MetaMask wallet to analyze your own transactions</p>
-                        <button 
-                            className="connect-btn" 
-                            onClick={connectWallet}
-                            disabled={isConnecting}
-                        >
-                            {isConnecting ? '🔄 Connecting...' : '🦊 Connect MetaMask'}
-                        </button>
-                    </div>
+                    {!authenticated ? (
+                        <>
+                            <div className="connection-option">
+                                <h3>Option 1: Connect Your Glyph Account</h3>
+                                <p>Connect your Glyph account to analyze your linked wallet transactions</p>
+                                <button 
+                                    className="connect-btn" 
+                                    onClick={connectWallet}
+                                    disabled={isConnecting}
+                                >
+                                    {isConnecting ? '🔄 Connecting...' : '🔗 Connect Glyph'}
+                                </button>
+                            </div>
 
-                    <div className="divider">
-                        <span>OR</span>
-                    </div>
+                            <div className="divider">
+                                <span>OR</span>
+                            </div>
+                        </>
+                    ) : (
+                        <>
+                            <div className="connection-option">
+                                <h3>🔗 Connected to Glyph</h3>
+                                <p>Welcome {user?.name || 'Glyph User'}! Select a wallet to analyze:</p>
+                                
+                                {/* Linked Wallets Selection */}
+                                {user?.linkedWallets && user.linkedWallets.length > 0 && (
+                                    <div className="wallet-selection">
+                                        <h4>📱 Linked Wallets (Recommended)</h4>
+                                        <p>Select one of your linked wallets for analysis:</p>
+                                        {user.linkedWallets.map((wallet, index) => (
+                                            <button
+                                                key={wallet.address}
+                                                className={`wallet-option ${selectedLinkedWallet === wallet.address ? 'selected' : ''}`}
+                                                onClick={() => {
+                                                    setSelectedLinkedWallet(wallet.address);
+                                                    setAddressToAnalyze(wallet.address);
+                                                    updateUrlWithWallet(wallet.address);
+                                                }}
+                                            >
+                                                <span className="wallet-label">
+                                                    📱 {wallet.walletClientType?.split('_').join(' ') || `Linked Wallet ${index + 1}`}
+                                                </span>
+                                                <span className="wallet-address">
+                                                    {wallet.address.slice(0, 6)}...{wallet.address.slice(-4)}
+                                                </span>
+                                            </button>
+                                        ))}
+                                    </div>
+                                )}
+                                
+                                {/* Main Wallet Option */}
+                                {user?.evmWallet && (
+                                    <div className="wallet-selection">
+                                        <h4>🏠 Main Wallet</h4>
+                                        <button
+                                            className={`wallet-option ${selectedLinkedWallet === null && addressToAnalyze === user.evmWallet ? 'selected' : ''}`}
+                                            onClick={() => {
+                                                setSelectedLinkedWallet(null);
+                                                setAddressToAnalyze(user.evmWallet);
+                                                updateUrlWithWallet(user.evmWallet);
+                                            }}
+                                        >
+                                            <span className="wallet-label">🏠 Main Glyph Wallet</span>
+                                            <span className="wallet-address">
+                                                {user.evmWallet.slice(0, 6)}...{user.evmWallet.slice(-4)}
+                                            </span>
+                                        </button>
+                                    </div>
+                                )}
+                                
+                                <button 
+                                    className="disconnect-btn" 
+                                    onClick={disconnectWallet}
+                                    style={{ marginTop: '1rem' }}
+                                >
+                                    🔌 Disconnect Glyph
+                                </button>
+                            </div>
+
+                            <div className="divider">
+                                <span>OR</span>
+                            </div>
+                        </>
+                    )}
 
                     {/* Manual Address Section */}
                     <div className="connection-option">
@@ -299,7 +321,7 @@ function App() {
             ) : (
                 <WalletAnalyzer 
                     account={addressToAnalyze} 
-                    connectedAccount={account}
+                    connectedAccount={authenticated && user ? (selectedLinkedWallet || user.evmWallet) : null}
                     onDisconnect={disconnectWallet}
                     onClearAnalysis={clearAnalysis}
                 />

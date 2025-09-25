@@ -67,7 +67,9 @@ module.exports = (env, argv) => {
         "util": require.resolve("util"),
         "stream": require.resolve("stream-browserify"),
         "crypto": require.resolve("crypto-browserify"),
-        "vm": require.resolve("vm-browserify")
+        "vm": require.resolve("vm-browserify"),
+        // Ignore React Native dependencies
+        "@react-native-async-storage/async-storage": false
       }
     }
   };
