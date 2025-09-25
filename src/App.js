@@ -324,6 +324,7 @@ function AppContent() {
                     connectedAccount={authenticated && user ? (selectedLinkedWallet || user.evmWallet) : null}
                     onDisconnect={disconnectWallet}
                     onClearAnalysis={clearAnalysis}
+                    onConnectGlyph={connectWallet}
                 />
             )}
         </div>

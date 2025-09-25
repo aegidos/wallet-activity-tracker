@@ -548,7 +548,7 @@ async function requestAccounts() {
     }
 }
 
-function WalletAnalyzer({ account, connectedAccount, onDisconnect, onClearAnalysis }) {
+function WalletAnalyzer({ account, connectedAccount, onDisconnect, onClearAnalysis, onConnectGlyph }) {
     const [analyzedWallet, setAnalyzedWallet] = useState(account);
 
     useEffect(() => {
@@ -612,6 +612,19 @@ function WalletAnalyzer({ account, connectedAccount, onDisconnect, onClearAnalys
         isMobile: typeof window !== 'undefined' ? window.innerWidth <= 480 : false,
         isTablet: typeof window !== 'undefined' ? window.innerWidth <= 768 : false
     });
+
+    // Authentication popup state
+    const [showAuthPopup, setShowAuthPopup] = useState(false);
+    const [isConnectingGlyph, setIsConnectingGlyph] = useState(false);
+
+    // Handle WATCH button click with authentication check
+    const handleWatchClick = () => {
+        if (!connectedAccount) {
+            setShowAuthPopup(true);
+        } else {
+            setCurrentView('watch');
+        }
+    };
 
     // Fetch token prices using free APIs (Alchemy + Binance fallback)
     const fetchTokenPrices = async (tokens) => {
@@ -4544,7 +4557,7 @@ function WalletAnalyzer({ account, connectedAccount, onDisconnect, onClearAnalys
                     }}>
                         {/* Watch button */}
                         <button
-                            onClick={() => setCurrentView('watch')}
+                            onClick={handleWatchClick}
                             style={{
                                 background: currentView === 'watch' ? 'linear-gradient(135deg, rgba(31, 81, 255, 0.8) 0%, rgba(31, 81, 255, 0.6) 100%)' : 'transparent',
                                 color: currentView === 'watch' ? '#FFFFFF' : '#e0e0e0',
@@ -5599,6 +5612,190 @@ function WalletAnalyzer({ account, connectedAccount, onDisconnect, onClearAnalys
                     ))}
                 </div>
             </div>
+
+            {/* Authentication Popup/Overlay */}
+            {showAuthPopup && (
+                <div 
+                    style={{
+                        position: 'fixed',
+                        top: 0,
+                        left: 0,
+                        right: 0,
+                        bottom: 0,
+                        background: 'rgba(0, 0, 0, 0.8)',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        zIndex: 10000,
+                        backdropFilter: 'blur(4px)'
+                    }}
+                    onClick={(e) => {
+                        // Close popup when clicking outside the modal content
+                        if (e.target === e.currentTarget) {
+                            setShowAuthPopup(false);
+                        }
+                    }}
+                >
+                    <div style={{
+                        background: 'linear-gradient(135deg, #1a1a2e 0%, #16213e 50%, #0f0f23 100%)',
+                        borderRadius: '16px',
+                        padding: '32px',
+                        border: '1px solid rgba(31, 81, 255, 0.3)',
+                        boxShadow: '0 20px 40px rgba(0, 0, 0, 0.5)',
+                        maxWidth: '400px',
+                        width: '90%',
+                        textAlign: 'center',
+                        position: 'relative'
+                    }}>
+                        {/* Close button */}
+                        <button
+                            onClick={() => setShowAuthPopup(false)}
+                            style={{
+                                position: 'absolute',
+                                top: '12px',
+                                right: '12px',
+                                background: 'transparent',
+                                border: 'none',
+                                color: '#9ca3af',
+                                fontSize: '1.5rem',
+                                cursor: 'pointer',
+                                padding: '4px',
+                                borderRadius: '4px',
+                                transition: 'all 0.2s ease'
+                            }}
+                            onMouseEnter={(e) => {
+                                e.target.style.color = '#ffffff';
+                                e.target.style.background = 'rgba(239, 68, 68, 0.2)';
+                            }}
+                            onMouseLeave={(e) => {
+                                e.target.style.color = '#9ca3af';
+                                e.target.style.background = 'transparent';
+                            }}
+                            title="Close"
+                        >
+                            ✕
+                        </button>
+
+                        {/* Glyph logo/icon */}
+                        <div style={{
+                            fontSize: '3rem',
+                            marginBottom: '16px',
+                            filter: 'drop-shadow(0 0 12px rgba(31, 81, 255, 0.3))'
+                        }}>
+                            🔗
+                        </div>
+
+                        <h3 style={{
+                            color: '#ffffff',
+                            fontSize: '1.5rem',
+                            fontWeight: '600',
+                            marginBottom: '12px',
+                            textShadow: '0 0 8px rgba(31, 81, 255, 0.3)'
+                        }}>
+                            Authentication Required
+                        </h3>
+
+                        <p style={{
+                            color: '#9ca3af',
+                            fontSize: '1rem',
+                            marginBottom: '24px',
+                            lineHeight: '1.5'
+                        }}>
+                            Please connect your Glyph wallet to access the watchlist feature and manage your saved wallets.
+                        </p>
+
+                        <div style={{
+                            display: 'flex',
+                            gap: '12px',
+                            justifyContent: 'center',
+                            flexWrap: 'wrap'
+                        }}>
+                            <button
+                                onClick={async () => {
+                                    if (isConnectingGlyph) return; // Prevent double clicks
+                                    
+                                    setIsConnectingGlyph(true);
+                                    try {
+                                        // Trigger the same Glyph connection routine as "Option 1"
+                                        if (onConnectGlyph) {
+                                            await onConnectGlyph();
+                                            // If successful, close popup
+                                            setShowAuthPopup(false);
+                                        }
+                                    } catch (error) {
+                                        console.error('Error connecting Glyph from popup:', error);
+                                        // Keep popup open on error
+                                    } finally {
+                                        setIsConnectingGlyph(false);
+                                    }
+                                }}
+                                disabled={isConnectingGlyph}
+                                style={{
+                                    background: isConnectingGlyph 
+                                        ? 'rgba(107, 114, 128, 0.6)' 
+                                        : 'linear-gradient(135deg, rgba(31, 81, 255, 0.8) 0%, rgba(31, 81, 255, 0.6) 100%)',
+                                    color: '#ffffff',
+                                    border: '1px solid rgba(31, 81, 255, 0.3)',
+                                    padding: '12px 24px',
+                                    borderRadius: '8px',
+                                    cursor: isConnectingGlyph ? 'not-allowed' : 'pointer',
+                                    fontSize: '1rem',
+                                    fontWeight: '600',
+                                    boxShadow: isConnectingGlyph 
+                                        ? '0 2px 8px rgba(107, 114, 128, 0.3)' 
+                                        : '0 4px 12px rgba(31, 81, 255, 0.3)',
+                                    textShadow: isConnectingGlyph 
+                                        ? 'none' 
+                                        : '0 0 8px rgba(31, 81, 255, 0.3)',
+                                    transition: 'all 0.2s ease',
+                                    opacity: isConnectingGlyph ? 0.7 : 1
+                                }}
+                                onMouseEnter={(e) => {
+                                    if (!isConnectingGlyph) {
+                                        e.target.style.transform = 'translateY(-2px)';
+                                        e.target.style.boxShadow = '0 6px 16px rgba(31, 81, 255, 0.4)';
+                                    }
+                                }}
+                                onMouseLeave={(e) => {
+                                    if (!isConnectingGlyph) {
+                                        e.target.style.transform = 'translateY(0px)';
+                                        e.target.style.boxShadow = '0 4px 12px rgba(31, 81, 255, 0.3)';
+                                    }
+                                }}
+                            >
+                                {isConnectingGlyph ? '� Connecting...' : '�🔗 Connect Glyph'}
+                            </button>
+
+                            <button
+                                onClick={() => setShowAuthPopup(false)}
+                                style={{
+                                    background: 'transparent',
+                                    color: '#9ca3af',
+                                    border: '1px solid rgba(156, 163, 175, 0.3)',
+                                    padding: '12px 24px',
+                                    borderRadius: '8px',
+                                    cursor: 'pointer',
+                                    fontSize: '1rem',
+                                    fontWeight: '500',
+                                    transition: 'all 0.2s ease'
+                                }}
+                                onMouseEnter={(e) => {
+                                    e.target.style.color = '#ffffff';
+                                    e.target.style.borderColor = 'rgba(156, 163, 175, 0.5)';
+                                    e.target.style.background = 'rgba(156, 163, 175, 0.1)';
+                                }}
+                                onMouseLeave={(e) => {
+                                    e.target.style.color = '#9ca3af';
+                                    e.target.style.borderColor = 'rgba(156, 163, 175, 0.3)';
+                                    e.target.style.background = 'transparent';
+                                }}
+                            >
+                                Cancel
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
         </div>
     );
 }
