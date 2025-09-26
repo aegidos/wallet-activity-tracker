@@ -573,6 +573,7 @@ function WalletAnalyzer({ account, connectedAccount, onDisconnect, onClearAnalys
     });
     const [tokenPrices, setTokenPrices] = useState({});
     const [totalTokenValueUSD, setTotalTokenValueUSD] = useState(0);
+    const [portfolioTotal, setPortfolioTotal] = useState(0);
     const [stakedAPEAmount, setStakedAPEAmount] = useState(0);
     const [nftPortfolio, setNftPortfolio] = useState([]);
     const [nftFloorPrices, setNftFloorPrices] = useState({});
@@ -1729,6 +1730,28 @@ function WalletAnalyzer({ account, connectedAccount, onDisconnect, onClearAnalys
         // Reset all balance and data states when switching wallets
         console.log('🔄 Wallet changed to:', analyzedWallet, '- Resetting all balances and data');
         
+        // IMPORTANT: Reset network totals FIRST to prevent stale data persistence
+        // This ensures the portfolio value is reset immediately
+        setNetworkTotals(prev => {
+            console.log('🧹 Resetting network totals. Previous totals:', JSON.stringify({
+                eth: prev.ethereum?.toFixed(2) || 0,
+                ape: prev.apechain?.toFixed(2) || 0,
+                bnb: prev.bnb?.toFixed(2) || 0,
+                sol: prev.solana?.toFixed(2) || 0
+            }));
+            
+            return {
+                ethereum: 0,
+                apechain: 0,
+                bnb: 0,
+                solana: 0,
+                total: 0
+            };
+        });
+        
+        // Force portfolio total update to show 0 immediately
+        setPortfolioTotal(0);
+        
         // Reset token and balance states
         setTokenBalances({
             ethereum: [],
@@ -1755,13 +1778,10 @@ function WalletAnalyzer({ account, connectedAccount, onDisconnect, onClearAnalys
         setTotalNftValueUSD(0);
         setNftCollectionValues({});
         
-        // Reset network totals
-        setNetworkTotals({
-            ethereum: 0,
-            apechain: 0,
-            bnb: 0,
-            solana: 0
-        });
+        // Force an immediate calculation with zero values to ensure everything is reset
+        setTimeout(() => {
+            calculateAndUpdatePortfolioTotal();
+        }, 50);
         
         // Reset transaction and analysis states
         setTransactions([]);
@@ -1791,41 +1811,91 @@ function WalletAnalyzer({ account, connectedAccount, onDisconnect, onClearAnalys
 
     // Callback to collect network totals from TokenBalanceDisplay components
     const handleNetworkTotal = React.useCallback((network) => {
-        let timeoutId;
+        let timeoutId = null;
+        
+        // Use an identifier tied to current wallet to help cleanup
+        const currentWallet = analyzedWallet; 
+        
         return (total) => {
+            // Skip updates if the wallet has changed
+            if (analyzedWallet !== currentWallet) {
+                console.log(`🚫 Ignoring stale ${network} update from previous wallet`);
+                return;
+            }
+            
+            // Force reset to 0 if total is NaN or undefined
+            const normalizedTotal = (typeof total === 'number' && !isNaN(total)) ? total : 0;
+            
             // Debounce rapid updates to prevent infinite loops
-            clearTimeout(timeoutId);
+            if (timeoutId) clearTimeout(timeoutId);
+            
             timeoutId = setTimeout(() => {
                 setNetworkTotals(prev => {
+                    // Validate again that we're working with the current wallet
+                    if (analyzedWallet !== currentWallet) {
+                        return prev;
+                    }
+                    
                     // Only update if the value actually changed to prevent infinite loops
-                    if (Math.abs((prev[network] || 0) - total) < 0.01) {
+                    if (Math.abs((prev[network] || 0) - normalizedTotal) < 0.01) {
                         return prev; // No change, return same object to prevent re-render
                     }
                     
-                    console.log(`📊 ${network} reported total: $${total.toFixed(2)} (was: $${(prev[network] || 0).toFixed(2)})`);
-                    const updated = { ...prev, [network]: total };
+                    console.log(`📊 ${network} reported total: $${normalizedTotal.toFixed(2)} (was: $${(prev[network] || 0).toFixed(2)}) [${currentWallet.slice(0,6)}]`);
+                    
+                    // Create new object with updated value
+                    const updated = { ...prev, [network]: normalizedTotal };
+                    
+                    // Debug log to verify all network totals
+                    console.log(`📊 All network totals after ${network} update:`, {
+                        ethereum: updated.ethereum || 0,
+                        apechain: updated.apechain || 0,
+                        bnb: updated.bnb || 0,
+                        solana: updated.solana || 0,
+                        total: Object.values(updated).reduce((sum, val) => sum + (val || 0), 0),
+                        wallet: analyzedWallet.slice(0,6)
+                    });
+                    
                     return updated;
                 });
             }, 100); // 100ms debounce
+            
+            // Return a cleanup function
+            return () => {
+                if (timeoutId) clearTimeout(timeoutId);
+            };
         };
-    }, []);
+    }, [analyzedWallet]); // Keep analyzedWallet as dependency to recreate the callback when wallet changes
 
     // Calculate and update portfolio total only once after all data is loaded
     const calculateAndUpdatePortfolioTotal = React.useCallback(() => {
-        const apePrice = tokenPrices['apechain-native'] || 0;
-        const stakedAPEValue = stakedAPEAmount * apePrice;
+        // Get latest state values directly to avoid closure issues
+        const currentApePrice = tokenPrices['apechain-native'] || 0;
+        const currentStakedAmount = stakedAPEAmount || 0;
+        const currentNftValue = totalNftValueUSD || 0;
+        const stakedAPEValue = currentStakedAmount * currentApePrice;
+        
+        // Double check we're still looking at the right wallet when calculating
+        const currentWallet = analyzedWallet;
+        console.log(`🧮 Calculating portfolio total for wallet: ${currentWallet.slice(0,6)}`);
         
         // Get current network totals from TokenBalanceDisplay components
         const baseTotal = Object.values(networkTotals).reduce((sum, val) => sum + (val || 0), 0);
-        const newPortfolioTotal = baseTotal + stakedAPEValue + totalNftValueUSD;
+        const newPortfolioTotal = baseTotal + stakedAPEValue + currentNftValue;
         
         // Check if we should save the portfolio snapshot
         const hasNFTs = nftPortfolio.length > 0;
-        const hasNFTValue = totalNftValueUSD > 0;
+        const hasNFTValue = currentNftValue > 0;
         const nftDataComplete = hasNFTs && hasNFTValue; // Either no NFTs, or NFTs with actual value
         
+        // Debug network values individually
+        console.log(`🧮 Network values: ETH=$${(networkTotals.ethereum || 0).toFixed(2)}, APE=$${(networkTotals.apechain || 0).toFixed(2)}, BNB=$${(networkTotals.bnb || 0).toFixed(2)}, SOL=$${(networkTotals.solana || 0).toFixed(2)}`);
+        
+        // Update the portfolio total
+        setPortfolioTotal(newPortfolioTotal);
+        
         if (newPortfolioTotal > 0) {
-            console.log(`💎 Portfolio Total Updated: $${newPortfolioTotal.toFixed(2)} (base: $${baseTotal.toFixed(2)} + staked: $${stakedAPEValue.toFixed(2)} + NFTs: $${totalNftValueUSD.toFixed(2)})`);
+            console.log(`💎 Portfolio Total Updated: $${newPortfolioTotal.toFixed(2)} (base: $${baseTotal.toFixed(2)} + staked: $${stakedAPEValue.toFixed(2)} + NFTs: $${currentNftValue.toFixed(2)}) for wallet: ${currentWallet.slice(0,6)}`);
             
             setTotalTokenValueUSD(newPortfolioTotal);
             
@@ -1896,9 +1966,8 @@ function WalletAnalyzer({ account, connectedAccount, onDisconnect, onClearAnalys
     // Insert NFT collections and calculate final portfolio total after all data is loaded
     useEffect(() => {
         const insertCollectionsAndCalculateTotal = async () => {
-            // Check if all data is loaded and we have sufficient data
-            if (tokenDataLoaded && !fetchingFloorPrices && 
-                Object.keys(networkTotals).some(key => networkTotals[key] > 0)) {
+            // Check if all data is loaded
+            if (tokenDataLoaded && !fetchingFloorPrices) {
                 
                 // First, calculate and update the portfolio total
                 console.log('💎 Calculating final portfolio total...');
@@ -4325,7 +4394,8 @@ function WalletAnalyzer({ account, connectedAccount, onDisconnect, onClearAnalys
 
         // Report the total to parent component when values change
         React.useEffect(() => {
-            if (onTotalCalculated && networkTotalUSD !== undefined && networkTotalUSD > 0) {
+            if (onTotalCalculated && networkTotalUSD !== undefined) {
+                // Always report the total, even when it's 0
                 onTotalCalculated(networkTotalUSD);
             }
         }, [networkTotalUSD, onTotalCalculated]);
@@ -4869,8 +4939,8 @@ function WalletAnalyzer({ account, connectedAccount, onDisconnect, onClearAnalys
                         )}
                         <div className="stat-card" style={{borderLeftColor: '#06b6d4'}}>
                             <div className="stat-value" style={{color: '#06b6d4'}}>
-                                {tokenDataLoaded && (Object.values(networkTotals).some(total => total > 0) || totalNftValueUSD > 0) ? 
-                                    `$${Math.round(totalTokenValueUSD)}` : 
+                                {tokenDataLoaded ? 
+                                    `$${Math.round(portfolioTotal)}` : 
                                     'Loading...'
                                 }
                             </div>
@@ -5056,21 +5126,25 @@ function WalletAnalyzer({ account, connectedAccount, onDisconnect, onClearAnalys
             {/* Hidden TokenBalanceDisplay components - always rendered to calculate totals */}
             <div style={{ display: 'none' }}>
                 <TokenBalanceDisplay 
+                    key={`ethereum-${account}`}
                     networkBalances={tokenBalances.ethereum} 
                     networkName="Ethereum Mainnet" 
                     onTotalCalculated={handleNetworkTotal('ethereum')}
                 />
                 <TokenBalanceDisplay 
+                    key={`apechain-${account}`}
                     networkBalances={tokenBalances.apechain} 
                     networkName="ApeChain" 
                     onTotalCalculated={handleNetworkTotal('apechain')}
                 />
                 <TokenBalanceDisplay 
+                    key={`bnb-${account}`}
                     networkBalances={tokenBalances.bnb} 
                     networkName="BNB Chain" 
                     onTotalCalculated={handleNetworkTotal('bnb')}
                 />
                 <TokenBalanceDisplay 
+                    key={`solana-${account}`}
                     networkBalances={tokenBalances.solana} 
                     networkName="Solana" 
                     onTotalCalculated={handleNetworkTotal('solana')}
@@ -5098,6 +5172,7 @@ function WalletAnalyzer({ account, connectedAccount, onDisconnect, onClearAnalys
                     border: '1px solid #374151'
                 }}>
                     <TokenBalanceDisplay 
+                        key={`ethereum-display-${account}`}
                         networkBalances={tokenBalances.ethereum} 
                         networkName="Ethereum Mainnet" 
                     />
@@ -5109,6 +5184,7 @@ function WalletAnalyzer({ account, connectedAccount, onDisconnect, onClearAnalys
                     border: '1px solid #374151'
                 }}>
                     <TokenBalanceDisplay 
+                        key={`apechain-display-${account}`}
                         networkBalances={tokenBalances.apechain} 
                         networkName="ApeChain" 
                     />
@@ -5120,6 +5196,7 @@ function WalletAnalyzer({ account, connectedAccount, onDisconnect, onClearAnalys
                     border: '1px solid #374151'
                 }}>
                     <TokenBalanceDisplay 
+                        key={`bnb-display-${account}`}
                         networkBalances={tokenBalances.bnb} 
                         networkName="BNB Chain" 
                     />
@@ -5131,6 +5208,7 @@ function WalletAnalyzer({ account, connectedAccount, onDisconnect, onClearAnalys
                     border: '1px solid #374151'
                 }}>
                     <TokenBalanceDisplay 
+                        key={`solana-display-${account}`}
                         networkBalances={tokenBalances.solana} 
                         networkName="Solana" 
                     />
