@@ -154,19 +154,25 @@ const isCollectionActive = (stats, currentFloorPrice = null) => {
     }
     
     // Check for recent trading volume (30 days) - THIS IS KEY
-    if (stats.volume_30d !== undefined && stats.volume_30d === 0) {
+    if (stats.volume_30d !== undefined && stats.volume_30d !== null && stats.volume_30d === 0) {
         console.warn(`❌ No trading volume in last 30 days (volume_30d = 0)`);
         return false;
     }
+
+    // For null volume_30d (API didn't return data), we should also warn
+    if (stats.volume_30d === null) {
+        console.warn(`⚠️ Volume data (30d) is null - this could indicate no recent trading`);
+        // Continue with other checks instead of immediate rejection
+    }
     
     // Check for yearly trading volume if available (365 days)
-    if (stats.volume_365d !== undefined && stats.volume_365d === 0) {
+    if (stats.volume_365d !== undefined && stats.volume_365d !== null && stats.volume_365d === 0) {
         console.warn(`❌ No trading volume in last year (volume_365d = 0)`);
         return false;
     }
     
     // Fallback to floor_sale_30d check if volume data isn't available
-    if (stats.volume_30d === undefined) {
+    if (stats.volume_30d === undefined || stats.volume_30d === null) {
         if (stats.floor_sale_30d === null || stats.floor_sale_30d === undefined) {
             console.warn(`❌ No floor sales data available (30d)`);
             return false;
@@ -178,8 +184,10 @@ const isCollectionActive = (stats, currentFloorPrice = null) => {
         }
         
         console.log(`✅ Floor sale activity detected: ${stats.floor_sale_30d} crypto units (30d)`);
-    } else {
+    } else if (stats.volume_30d !== null && stats.volume_30d !== undefined && stats.volume_30d > 0) {
         console.log(`✅ Trading volume detected: ${stats.volume_30d} crypto units (30d)`);
+    } else {
+        console.log(`⚠️ Using floor sale data as volume data is unavailable or unreliable`);
     }
     
     // Check for extreme price pumps: current floor vs recent sales (100x threshold)
