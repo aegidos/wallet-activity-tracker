@@ -126,13 +126,11 @@ const getAllNftCollections = async () => {
 
 /**
  * Check if a collection is active and has realistic pricing
- * Uses trading volume data with better handling of null/zero values
+ * Uses floorSale data and isSpam flag for validation
  */
 const isCollectionActive = (stats, currentFloorPrice = null) => {
     console.log(`🔍 Validating collection activity:`, {
         floorSale30d: stats.floor_sale_30d,
-        volume1d: stats.volume_1d,
-        volume7d: stats.volume_7d,
         volume30d: stats.volume_30d,
         volume365d: stats.volume_365d,
         volumeAllTime: stats.volume_all_time,
@@ -140,8 +138,7 @@ const isCollectionActive = (stats, currentFloorPrice = null) => {
         owners: stats.owners,
         floorPriceUSD: stats.floor_price_usd,
         isSpam: stats.is_spam,
-        priceRatio: currentFloorPrice && stats.floor_sale_30d ? (currentFloorPrice / stats.floor_sale_30d).toFixed(1) + 'x' : 'N/A',
-        sales30d: stats.activity?.sales_30d || null
+        priceRatio: currentFloorPrice && stats.floor_sale_30d ? (currentFloorPrice / stats.floor_sale_30d).toFixed(1) + 'x' : 'N/A'
     });
     
     // Immediately reject spam collections
@@ -156,36 +153,45 @@ const isCollectionActive = (stats, currentFloorPrice = null) => {
         return false;
     }
     
-    // Check trading activity using a multi-tiered approach
-    
-    // 1. First check: Is there ANY recent activity? (last 30 days)
-    const hasRecentActivity = (
-        (stats.volume_1d !== null && stats.volume_1d > 0) ||
-        (stats.volume_7d !== null && stats.volume_7d > 0) ||
-        (stats.volume_30d !== null && stats.volume_30d > 0) ||
-        (stats.activity?.sales_30d !== null && stats.activity?.sales_30d > 0)
-    );
-    
-    if (hasRecentActivity) {
-        console.log(`✅ Collection has recent trading activity`);
-        // Collection has recent activity - consider active
-        return true;
+    // Check for recent trading volume (30 days) - THIS IS KEY
+    if (stats.volume_30d !== undefined && stats.volume_30d !== null && stats.volume_30d === 0) {
+        console.warn(`❌ No trading volume in last 30 days (volume_30d = 0)`);
+        return false;
+    }
+
+    // For null volume_30d (API didn't return data), we should also warn
+    if (stats.volume_30d === null) {
+        console.warn(`⚠️ Volume data (30d) is null - this could indicate no recent trading`);
+        // Continue with other checks instead of immediate rejection
     }
     
-    // 2. Second check: No recent activity, but has historical activity?
-    const hasHistoricalActivity = stats.volume_all_time !== null && stats.volume_all_time > 0;
-    const hasNoRecentActivity = (
-        (stats.volume_30d === 0) || // Explicit 0 means API confirmed no activity
-        (stats.volume_1d === 0 && stats.volume_7d === 0) // Both shorter timeframes show zero
-    );
-    
-    if (hasNoRecentActivity && hasHistoricalActivity) {
-        // Collection has historical activity but no recent trades (likely inactive)
-        console.warn(`❌ Collection appears inactive: has all-time volume (${stats.volume_all_time}) but no recent activity`);
+    // Reject if yearly trading volume is missing or zero
+    if (stats.volume_365d !== null || stats.volume_365d === 0) {
+        console.warn(`❌ No trading volume in last year (volume_365d = ${stats.volume_365d})`);
         return false;
     }
     
-    // 3. Third check: Floor price ratio sanity check
+    // Fallback to floor_sale_30d check if volume data isn't available
+    if (stats.volume_30d === undefined || stats.volume_30d === null) {
+        if (stats.floor_sale_30d === null || stats.floor_sale_30d === undefined) {
+            console.warn(`❌ No floor sales data available (30d)`);
+            return false;
+        }
+        
+        if (stats.floor_sale_30d === 0) {
+            console.warn(`❌ No floor sales in last 30 days`);
+            return false;
+        }
+        
+        console.log(`✅ Floor sale activity detected: ${stats.floor_sale_30d} crypto units (30d)`);
+    } else if (stats.volume_30d !== null && stats.volume_30d !== undefined && stats.volume_30d > 0) {
+        console.log(`✅ Trading volume detected: ${stats.volume_30d} crypto units (30d)`);
+    } else {
+        console.log(`⚠️ Using floor sale data as volume data is unavailable or unreliable`);
+    }
+    
+    // Check for extreme price pumps: current floor vs recent sales (100x threshold)
+    // Compare crypto currency values (both in ETH/APE, not USD)
     if (currentFloorPrice && stats.floor_sale_30d && currentFloorPrice > 0 && stats.floor_sale_30d > 0) {
         const priceRatio = currentFloorPrice / stats.floor_sale_30d;
         if (priceRatio > 100) {
@@ -196,52 +202,14 @@ const isCollectionActive = (stats, currentFloorPrice = null) => {
         console.log(`💰 Price ratio check: Current floor (${currentFloorPrice}) is ${priceRatio.toFixed(1)}x recent sales (${stats.floor_sale_30d}) - acceptable`);
     }
     
-    // 4. Edge case: Missing volume data but has floor sales data - apply heuristic
-    if ((stats.volume_30d === null || stats.volume_30d === undefined) && 
-        stats.floor_sale_30d !== null && stats.floor_sale_30d > 0) {
-        
-        console.log(`⚠️ Missing volume data but has floor sale data - applying heuristic check`);
-        
-        // Check if floor sale price seems realistic
-        if (stats.floor_price_usd > 100000) {
-            console.warn(`❌ Extremely high floor price ($${stats.floor_price_usd}) - likely unrealistic`);
-            return false;
-        }
-        
-        // If floor data exists but all volume is 0, likely inactive
-        if (stats.volume_1d === 0 && stats.volume_7d === 0) {
-            console.warn(`❌ Zero recent volume with floor sale data - likely inactive`);
-            return false;
-        }
-        
-        // If we have all-time volume but no recent volume, check the ratio
-        if (stats.volume_all_time > 0) {
-            // If floor price is more than 2x all-time volume, be suspicious
-            if (currentFloorPrice && (currentFloorPrice > stats.volume_all_time * 2)) {
-                console.warn(`❌ Floor price (${currentFloorPrice}) much higher than all-time volume (${stats.volume_all_time}) - suspicious`);
-                return false;
-            }
-        }
-        
-        console.log(`⚖️ Floor sale data looks reasonable - giving benefit of doubt`);
-        return true;
-    }
-    
-    // 5. Last resort: Very high owner count might indicate activity despite missing data
-    if (stats.owners > 1000) {
-        console.log(`⚠️ Missing volume data but has ${stats.owners} owners - giving benefit of doubt`);
-        return true;
-    }
-    
     // Additional validation: Extremely high floor prices (>$100k) are suspicious
     if (stats.floor_price_usd && stats.floor_price_usd > 100000) {
         console.warn(`❌ Extremely high floor price ($${stats.floor_price_usd}) - likely unrealistic`);
         return false;
     }
     
-    // If we've reached here without making a determination, default to inactive
-    console.warn(`❌ Insufficient activity data to confirm collection is active`);
-    return false;
+    console.log(`✅ Collection passes validation`);
+    return true;
 };
 
 /**
@@ -275,20 +243,12 @@ const fetchCollectionFloorPrice = async (contractAddress, network = 'ethereum', 
                 // Extract collection statistics for validation using new API fields
                 const stats = {
                     floor_sale_30d: collection.floorSale?.['30day'] || null,
-                    volume_1d: collection.volume?.['1day'] || null,
-                    volume_7d: collection.volume?.['7day'] || null,
                     volume_30d: collection.volume?.['30day'] || null,
                     volume_365d: collection.volume?.['365day'] || null,
                     volume_all_time: collection.volume?.['allTime'] || null,
                     owners: collection.ownerCount || null,
                     floor_price_usd: floorPriceUSD || null,
-                    is_spam: collection.isSpam || false,
-                    activity: {
-                        sales_30d: collection.nftSales?.['30day'] || null,
-                        sales_7d: collection.nftSales?.['7day'] || null,
-                        sales_1d: collection.nftSales?.['1day'] || null
-                    },
-                    created_date: collection.createdDate || null
+                    is_spam: collection.isSpam || false
                 };
                 
                 // Validate collection activity - set suspicious collections to zero instead of filtering
