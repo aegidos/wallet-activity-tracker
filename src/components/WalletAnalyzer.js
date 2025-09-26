@@ -1178,6 +1178,35 @@ function WalletAnalyzer({ account, connectedAccount, onDisconnect, onClearAnalys
                         price = 0;
                     }
                     
+                    // If price is still 0 or missing, try to fetch from Supabase
+                    if ((price === 0 || price === undefined || isNaN(price)) && contractAddr) {
+                        // Convert network name to lowercase format used in database
+                        const dbNetwork = networkName.toLowerCase().replace(' chain', '');
+                        
+                        // Define async function to get price from database
+                        const fetchTokenPriceFromDB = async () => {
+                            try {
+                                // Import getTokenPrice function dynamically to avoid circular imports
+                                const { getTokenPrice } = await import('../utils/supabase');
+                                
+                                const result = await getTokenPrice(contractAddr, dbNetwork);
+                                
+                                if (result.success && result.data && result.data.current_price) {
+                                    console.log(`✅ Found token price in database for ${token.symbol || contractAddr} on ${dbNetwork}: $${result.data.current_price}`);
+                                    return result.data.current_price;
+                                }
+                                return 0;
+                            } catch (err) {
+                                console.error(`❌ Error fetching token price from database for ${contractAddr} on ${dbNetwork}:`, err);
+                                return 0;
+                            }
+                        };
+                        
+                        // Since we can't use await directly in calculateTokenValue, 
+                        // we'll use this as a fallback later and for now just set a flag
+                        token.shouldCheckDatabase = true;
+                    }
+                    
                     // Validate price
                     if (isNaN(price) || price < 0) {
                         price = 0;
@@ -1203,29 +1232,126 @@ function WalletAnalyzer({ account, connectedAccount, onDisconnect, onClearAnalys
             };
             
             // Calculate token values by network with error handling (using filtered tokens)
+            // First pass - calculate values with available prices
+            const tokensNeedingDatabasePrices = {
+                ethereum: [],
+                apechain: [],
+                bnb: [],
+                solana: []
+            };
+            
             filteredEthereumBalances.forEach(token => {
                 const tokenValue = calculateTokenValue(token, 'Ethereum');
-                tokenBreakdown.ethereum += tokenValue;
-                totalUSD += tokenValue;
+                if (token.shouldCheckDatabase) {
+                    tokensNeedingDatabasePrices.ethereum.push(token);
+                } else {
+                    tokenBreakdown.ethereum += tokenValue;
+                    totalUSD += tokenValue;
+                }
             });
             
             filteredApeChainBalances.forEach(token => {
                 const tokenValue = calculateTokenValue(token, 'ApeChain');
-                tokenBreakdown.apechain += tokenValue;
-                totalUSD += tokenValue;
+                if (token.shouldCheckDatabase) {
+                    tokensNeedingDatabasePrices.apechain.push(token);
+                } else {
+                    tokenBreakdown.apechain += tokenValue;
+                    totalUSD += tokenValue;
+                }
             });
             
             filteredBnbBalances.forEach(token => {
                 const tokenValue = calculateTokenValue(token, 'BNB Chain');
-                tokenBreakdown.bnb += tokenValue;
-                totalUSD += tokenValue;
+                if (token.shouldCheckDatabase) {
+                    tokensNeedingDatabasePrices.bnb.push(token);
+                } else {
+                    tokenBreakdown.bnb += tokenValue;
+                    totalUSD += tokenValue;
+                }
             });
             
             filteredSolanaBalances.forEach(token => {
                 const tokenValue = calculateTokenValue(token, 'Solana');
-                tokenBreakdown.solana += tokenValue;
-                totalUSD += tokenValue;
+                if (token.shouldCheckDatabase) {
+                    tokensNeedingDatabasePrices.solana.push(token);
+                } else {
+                    tokenBreakdown.solana += tokenValue;
+                    totalUSD += tokenValue;
+                }
             });
+            
+            // Second pass - handle tokens that need prices from the database
+            const fetchDatabasePrices = async () => {
+                try {
+                    console.log('📊 Fetching token prices from database for tokens without available prices');
+                    
+                    // Import the getTokenPrice function
+                    const { getTokenPrice } = await import('../utils/supabase');
+                    
+                    // Process each network
+                    const networks = ['ethereum', 'apechain', 'bnb', 'solana'];
+                    const networkDisplayNames = {
+                        'ethereum': 'Ethereum',
+                        'apechain': 'ApeChain',
+                        'bnb': 'BNB Chain',
+                        'solana': 'Solana'
+                    };
+                    
+                    let additionalValue = 0;
+                    
+                    // Process tokens for each network
+                    for (const network of networks) {
+                        const tokens = tokensNeedingDatabasePrices[network];
+                        console.log(`🔍 Looking up ${tokens.length} token prices from database for ${network}`);
+                        
+                        for (const token of tokens) {
+                            const contractAddr = token.contractAddress?.toLowerCase() || token.mint?.toLowerCase();
+                            if (!contractAddr) continue;
+                            
+                            // Fetch price from database
+                            const result = await getTokenPrice(contractAddr, network);
+                            
+                            if (result.success && result.data && result.data.current_price) {
+                                // Get token balance
+                                const decimals = token.decimals || (network === 'solana' ? 9 : 18);
+                                let rawBalance = token.tokenBalance;
+                                
+                                if (typeof rawBalance === 'string') {
+                                    rawBalance = rawBalance.startsWith('0x') ? parseInt(rawBalance, 16) : parseFloat(rawBalance) || 0;
+                                }
+                                
+                                const balance = rawBalance / Math.pow(10, decimals);
+                                const price = result.data.current_price;
+                                const tokenValue = balance * price;
+                                
+                                console.log(`💰 Using database price for ${token.symbol || contractAddr} on ${network}: $${price} × ${balance} = $${tokenValue.toFixed(2)}`);
+                                
+                                // Add to totals
+                                tokenBreakdown[network] += tokenValue;
+                                additionalValue += tokenValue;
+                                
+                                // Add to token list with price information
+                                token.databasePrice = price;
+                            }
+                        }
+                    }
+                    
+                    console.log(`💵 Added $${additionalValue.toFixed(2)} from database token prices to portfolio total`);
+                    totalUSD += additionalValue;
+                    
+                    // Update UI with new total
+                    setTotalUSD(totalUSD);
+                    setTokenBreakdown(tokenBreakdown);
+                    
+                    return additionalValue;
+                } catch (error) {
+                    console.error('❌ Error fetching database prices:', error);
+                    return 0;
+                }
+            };
+            
+            // Start fetching database prices (but don't wait for it to complete before continuing)
+            fetchDatabasePrices();
             
             // Add native balances to total
             const ethPrice = combinedPrices['ethereum-native'] || 0;
@@ -4394,9 +4520,15 @@ function WalletAnalyzer({ account, connectedAccount, onDisconnect, onClearAnalys
                 const balance = rawBalance / Math.pow(10, decimals);
                 
                 // Override price for APES IN SPACE token to avoid wrong SPACE token confusion
-                let price = tokenPrices[token.contractAddress.toLowerCase()] || token.alchemyPrice || 0;
+                let price = tokenPrices[token.contractAddress?.toLowerCase()] || token.alchemyPrice || 0;
                 if (token.name && token.name.toLowerCase().includes('apes in space')) {
                     price = 0; // Set to zero to avoid wrong token price
+                }
+                
+                // Use database price if regular price isn't available
+                if ((price === 0 || price === undefined) && token.databasePrice > 0) {
+                    price = token.databasePrice;
+                    console.log(`📊 Using database price for ${token.symbol || token.contractAddress} in network total: $${price}`);
                 }
                 
                 return sum + (balance * price);
@@ -4518,12 +4650,16 @@ function WalletAnalyzer({ account, connectedAccount, onDisconnect, onClearAnalys
                                 const decimals = token.decimals || (isSolana ? 9 : 18);
                                 const balance = rawBalance / Math.pow(10, decimals);
                                 
-                                let price = tokenPrices[token.contractAddress.toLowerCase()] || token.alchemyPrice || 0;
+                                let price = tokenPrices[token.contractAddress?.toLowerCase()] || token.alchemyPrice || 0;
                                 if (token.name && token.name.toLowerCase().includes('apes in space')) {
                                     price = 0;
                                 }
                                 
-                                const balanceUSD = balance * price;
+                                // Store database price separately (will be used in sort and display)
+                                const dbPrice = token.databasePrice > 0 ? token.databasePrice : 0;
+                                
+                                // Calculate balance USD with either price or database price
+                                const balanceUSD = price > 0 ? balance * price : dbPrice > 0 ? balance * dbPrice : 0;
                                 
                                 allTokens.push({
                                     ...token,
@@ -4534,12 +4670,21 @@ function WalletAnalyzer({ account, connectedAccount, onDisconnect, onClearAnalys
                                 });
                             });
                             
+                            // Calculate final USD values including database prices
+                            allTokens.forEach(token => {
+                                // If a token has a database price but no regular price, calculate the balance USD
+                                if (token.databasePrice > 0 && (!token.calculatedBalanceUSD || token.calculatedBalanceUSD === 0)) {
+                                    token.calculatedBalanceUSD = token.calculatedBalance * token.databasePrice;
+                                }
+                            });
+                            
                             // Sort all tokens by USD value (descending)
                             return allTokens
                                 .sort((a, b) => b.calculatedBalanceUSD - a.calculatedBalanceUSD)
                                 .map((token, index) => {
                                     const balance = token.calculatedBalance;
                                     const price = token.calculatedPrice;
+                                    // Use database price if available and regular price isn't
                                     const balanceUSD = token.calculatedBalanceUSD;
                                     
                                     return (
@@ -4590,24 +4735,44 @@ function WalletAnalyzer({ account, connectedAccount, onDisconnect, onClearAnalys
                                                 })()}
                                             </td>
                                             <td style={{ 
-                                                color: price > 0 ? '#10b981' : '#6b7280',
-                                                fontWeight: token.isNative ? '600' : 'normal'
+                                                color: price > 0 ? '#10b981' : token.databasePrice > 0 ? '#f59e0b' : '#6b7280',
+                                                fontWeight: token.isNative ? '600' : (token.databasePrice > 0 ? '500' : 'normal')
                                             }}>
-                                                {price > 0 ? `$${price.toFixed(2)}` : 'N/A'}
+                                                {price > 0 ? `$${price.toFixed(2)}` : 
+                                                 token.databasePrice > 0 ? `$${token.databasePrice.toFixed(2)}*` : 'N/A'}
                                             </td>
                                             <td style={{ 
-                                                color: balanceUSD > 0 ? '#10b981' : '#6b7280',
+                                                color: price > 0 ? '#10b981' : token.databasePrice > 0 ? '#f59e0b' : '#6b7280',
                                                 fontWeight: (balanceUSD > 1 || token.isNative) ? '600' : 'normal',
                                                 fontSize: token.isNative ? '14px' : 'inherit'
                                             }}>
-                                                {balanceUSD > 0 ? `$${balanceUSD.toFixed(0)}` : '$0'}
+                                                {price > 0 ? `$${balanceUSD.toFixed(0)}` : 
+                                                 (token.databasePrice > 0 && balance > 0) ? 
+                                                 `$${(token.databasePrice * balance).toFixed(0)}*` : '$0'}
                                             </td>
                                         </tr>
                                     );
                                 });
                         })()}
                         
-                        {/* Remove the old separate ERC-20 token mapping */}
+                        {/* Database prices legend */}
+                        {networkBalances.some(token => token.databasePrice > 0) && (
+                            <tr>
+                                <td colSpan="5" style={{ 
+                                    textAlign: 'center', 
+                                    padding: '10px', 
+                                    color: '#f59e0b',
+                                    fontStyle: 'italic',
+                                    fontSize: '0.8rem',
+                                    backgroundColor: 'rgba(245, 158, 11, 0.05)',
+                                    borderTop: '1px dashed rgba(245, 158, 11, 0.2)'
+                                }}>
+                                    * Price from dexscreener.com (updated every 2 hours)
+                                </td>
+                            </tr>
+                        )}
+                        
+                        {/* No tokens message */}
                         {networkBalances.length === 0 && (
                             <tr>
                                 <td colSpan="5" style={{ 

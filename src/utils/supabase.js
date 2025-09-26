@@ -399,6 +399,54 @@ export const deleteWatchedWallet = async (userWallet) => {
  * @param {Array} tokenPortfolio.solana - Solana tokens
  * @returns {Promise<Object>} Result of the operation
  */
+/**
+ * Get token price from the tokens table in Supabase
+ * @param {string} contractAddress - The token contract address
+ * @param {string} network - The blockchain network (ethereum, apechain, bnb, solana)
+ * @returns {Promise<Object>} The token data with current_price if available
+ */
+export const getTokenPrice = async (contractAddress, network) => {
+    if (!supabase) {
+        console.error('❌ Supabase client not initialized - cannot get token price');
+        return { success: false, error: 'Database not available' };
+    }
+
+    if (!contractAddress) {
+        return { success: false, error: 'Contract address is required' };
+    }
+
+    try {
+        console.log(`🔍 Looking up token price for ${contractAddress} on ${network}`);
+        
+        // Normalize address to lowercase
+        const normalizedAddress = contractAddress.toLowerCase();
+        
+        const { data, error } = await supabase
+            .from('tokens')
+            .select('*')
+            .eq('contract_address', normalizedAddress)
+            .eq('network', network)
+            .limit(1);
+
+        if (error) {
+            console.error('❌ Error getting token price:', error);
+            return { success: false, error: error.message };
+        }
+
+        if (!data || data.length === 0) {
+            console.warn(`⚠️ No token price found for ${contractAddress} on ${network}`);
+            return { success: false, error: 'Token not found' };
+        }
+
+        console.log(`✅ Found token price for ${data[0].symbol}: $${data[0].current_price || 'N/A'}`);
+        return { success: true, data: data[0] };
+
+    } catch (err) {
+        console.error('❌ Unexpected error getting token price:', err);
+        return { success: false, error: err.message };
+    }
+};
+
 export const insertTokensPerChain = async (tokens, network, userId = null) => {
     try {
         if (!Array.isArray(tokens) || tokens.length === 0) {
