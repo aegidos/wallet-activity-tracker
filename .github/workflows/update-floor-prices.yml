@@ -1,9 +1,9 @@
 name: Update NFT Floor Prices
 
-# Schedule to run every hour at the top of the hour
+# Schedule to run every 2 hours at the top of the hour
 on:
   schedule:
-    - cron: '0 * * * *'  # Every hour: minute 0, every hour, every day, every month, every day of week
+    - cron: '0 */2 * * *'  # Every 2 hours: minute 0, every 2nd hour, every day, every month, every day of week
   
   # Allow manual triggering for testing
   workflow_dispatch:
