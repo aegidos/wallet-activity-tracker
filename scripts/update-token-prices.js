@@ -34,9 +34,25 @@ const logger = {
 };
 
 // Initialize Supabase client
-const supabaseUrl = process.env.REACT_APP_SUPABASE_URL;
-const supabaseKey = process.env.REACT_APP_SUPABASE_ANON_KEY;
-const supabase = createClient(supabaseUrl, supabaseKey);
+const supabaseUrl = process.env.REACT_APP_SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL;
+const supabaseKey = process.env.REACT_APP_SUPABASE_ANON_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+
+// Use service role key if available (has RLS bypass privileges)
+const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+const isServiceRole = !!serviceRoleKey;
+
+if (isServiceRole) {
+  logger.info('🔑 Using service role key for database access (bypasses RLS)');
+} else {
+  logger.info('🔑 Using anonymous key for database access');
+}
+
+// Create Supabase client with appropriate key
+const supabase = createClient(
+  supabaseUrl, 
+  isServiceRole ? serviceRoleKey : supabaseKey,
+  isServiceRole ? { auth: { persistSession: false } } : {}
+);
 
 // Rate limiting to avoid API throttling
 const RATE_LIMIT_DELAY = 500; // 500ms between requests
@@ -118,7 +134,22 @@ async function syncTokensToDatabase(tokens) {
                 );
                 
             if (error) {
-                logger.error(`❌ Error upserting tokens batch: ${error.message}`);
+                // Check if it's an RLS policy error
+                if (error.message && error.message.includes('violates row-level security policy')) {
+                    logger.error(`❌ RLS Policy Error: ${error.message}`);
+                    logger.error(`
+                    This is a Row-Level Security (RLS) policy violation.
+                    
+                    To fix this:
+                    1. Add a SUPABASE_SERVICE_ROLE_KEY to your GitHub secrets
+                       OR
+                    2. Run the update-rls-for-github-actions.js script to update your RLS policies
+                    
+                    For more details, see the documentation in docs/token-tracking.md
+                    `);
+                } else {
+                    logger.error(`❌ Error upserting tokens batch: ${error.message}`);
+                }
                 continue;
             }
             
