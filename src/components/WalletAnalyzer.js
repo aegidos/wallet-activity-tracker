@@ -825,7 +825,9 @@ function WalletAnalyzer({ account, connectedAccount, onDisconnect, onClearAnalys
             "Prize",
             // Apes in Space - as mentioned in your code
             "Apes in Space",
-            "MB Coin"
+            "MB Coin",
+            "Oogear",
+            "ACT"
             // Add more blacklisted token names/symbols here
         ].map(s => s.toLowerCase()); // normalize to lowercase for comparison
     };

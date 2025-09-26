@@ -131,6 +131,9 @@ const getAllNftCollections = async () => {
 const isCollectionActive = (stats, currentFloorPrice = null) => {
     console.log(`🔍 Validating collection activity:`, {
         floorSale30d: stats.floor_sale_30d,
+        volume30d: stats.volume_30d,
+        volume365d: stats.volume_365d,
+        volumeAllTime: stats.volume_all_time,
         currentFloorPrice: currentFloorPrice,
         owners: stats.owners,
         floorPriceUSD: stats.floor_price_usd,
@@ -150,18 +153,34 @@ const isCollectionActive = (stats, currentFloorPrice = null) => {
         return false;
     }
     
-    // Check for recent floor sale activity (30 days)
-    if (stats.floor_sale_30d === null || stats.floor_sale_30d === undefined) {
-        console.warn(`❌ No floor sales data available (30d)`);
+    // Check for recent trading volume (30 days) - THIS IS KEY
+    if (stats.volume_30d !== undefined && stats.volume_30d === 0) {
+        console.warn(`❌ No trading volume in last 30 days (volume_30d = 0)`);
         return false;
     }
     
-    if (stats.floor_sale_30d === 0) {
-        console.warn(`❌ No floor sales in last 30 days`);
+    // Check for yearly trading volume if available (365 days)
+    if (stats.volume_365d !== undefined && stats.volume_365d === 0) {
+        console.warn(`❌ No trading volume in last year (volume_365d = 0)`);
         return false;
     }
     
-    console.log(`✅ Floor sale activity detected: ${stats.floor_sale_30d} crypto units (30d)`);
+    // Fallback to floor_sale_30d check if volume data isn't available
+    if (stats.volume_30d === undefined) {
+        if (stats.floor_sale_30d === null || stats.floor_sale_30d === undefined) {
+            console.warn(`❌ No floor sales data available (30d)`);
+            return false;
+        }
+        
+        if (stats.floor_sale_30d === 0) {
+            console.warn(`❌ No floor sales in last 30 days`);
+            return false;
+        }
+        
+        console.log(`✅ Floor sale activity detected: ${stats.floor_sale_30d} crypto units (30d)`);
+    } else {
+        console.log(`✅ Trading volume detected: ${stats.volume_30d} crypto units (30d)`);
+    }
     
     // Check for extreme price pumps: current floor vs recent sales (100x threshold)
     // Compare crypto currency values (both in ETH/APE, not USD)
@@ -216,6 +235,9 @@ const fetchCollectionFloorPrice = async (contractAddress, network = 'ethereum', 
                 // Extract collection statistics for validation using new API fields
                 const stats = {
                     floor_sale_30d: collection.floorSale?.['30day'] || null,
+                    volume_30d: collection.volume?.['30day'] || null,
+                    volume_365d: collection.volume?.['365day'] || null,
+                    volume_all_time: collection.volume?.['allTime'] || null,
                     owners: collection.ownerCount || null,
                     floor_price_usd: floorPriceUSD || null,
                     is_spam: collection.isSpam || false
