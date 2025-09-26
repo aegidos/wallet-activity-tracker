@@ -207,32 +207,54 @@ export const getCachedFloorPrices = async (contractAddresses) => {
         // Convert all addresses to lowercase for consistent matching
         const normalizedAddresses = contractAddresses.map(addr => addr.toLowerCase());
         
-        const { data, error } = await supabase
-            .from('nft_collections')
-            .select(`
-                contract_address,
-                collection_name,
-                floor_price_eth,
-                floor_price_usd,
-                floor_price_currency,
-                magic_eden_slug,
-                network,
-                last_floor_price_update
-            `)
-            .in('contract_address', normalizedAddresses)
-            .not('floor_price_eth', 'is', null)  // Only get collections that have floor prices
-            .not('floor_price_usd', 'is', null);
+        // Use batch processing to avoid 500 errors with large collections
+        const BATCH_SIZE = 100; // Process 100 addresses at a time
+        const totalBatches = Math.ceil(normalizedAddresses.length / BATCH_SIZE);
+        console.log(`🔄 Processing in ${totalBatches} batches of ${BATCH_SIZE} addresses`);
+        
+        let allData = [];
+        
+        // Process in batches
+        for (let i = 0; i < normalizedAddresses.length; i += BATCH_SIZE) {
+            const batch = normalizedAddresses.slice(i, i + BATCH_SIZE);
+            console.log(`🔄 Fetching batch ${Math.floor(i/BATCH_SIZE) + 1}/${totalBatches} (${batch.length} addresses)`);
+            
+            const { data, error } = await supabase
+                .from('nft_collections')
+                .select(`
+                    contract_address,
+                    collection_name,
+                    floor_price_eth,
+                    floor_price_usd,
+                    floor_price_currency,
+                    magic_eden_slug,
+                    network,
+                    last_floor_price_update
+                `)
+                .in('contract_address', batch)
+                .not('floor_price_eth', 'is', null)  // Only get collections that have floor prices
+                .not('floor_price_usd', 'is', null);
 
-        if (error) {
-            console.error('❌ Error fetching cached floor prices:', error);
-            return {};
+            if (error) {
+                console.error(`❌ Error fetching cached floor prices batch ${Math.floor(i/BATCH_SIZE) + 1}/${totalBatches}:`, error);
+                continue; // Continue with next batch instead of failing completely
+            }
+            
+            if (data && data.length > 0) {
+                allData = [...allData, ...data];
+            }
+            
+            // Add a small delay to avoid rate limits if needed
+            if (i + BATCH_SIZE < normalizedAddresses.length) {
+                await new Promise(resolve => setTimeout(resolve, 50));
+            }
         }
 
         // Convert to the same format as the Magic Eden API response
         const floorPricesMap = {};
         let cachedCount = 0;
         
-        data.forEach(collection => {
+        allData.forEach(collection => {
             const contractAddress = collection.contract_address.toLowerCase();
             
             floorPricesMap[contractAddress] = {
@@ -248,7 +270,10 @@ export const getCachedFloorPrices = async (contractAddresses) => {
             
             cachedCount++;
             
-            console.log(`✅ Cached floor price: ${collection.collection_name} = ${collection.floor_price_eth || collection.floor_price_usd} ${collection.floor_price_currency || 'ETH'} ($${collection.floor_price_usd?.toFixed(2) || 'N/A'})`);
+            // Only log some examples to avoid console spam with large collections
+            if (cachedCount <= 5 || cachedCount % 50 === 0) {
+                console.log(`✅ Cached floor price: ${collection.collection_name} = ${collection.floor_price_eth || collection.floor_price_usd} ${collection.floor_price_currency || 'ETH'} ($${collection.floor_price_usd?.toFixed(2) || 'N/A'})`);
+            }
         });
 
         const missedCount = contractAddresses.length - cachedCount;
