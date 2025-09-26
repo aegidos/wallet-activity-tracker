@@ -165,9 +165,9 @@ const isCollectionActive = (stats, currentFloorPrice = null) => {
         // Continue with other checks instead of immediate rejection
     }
     
-    // Check for yearly trading volume if available (365 days)
-    if (stats.volume_365d !== undefined && stats.volume_365d !== null && stats.volume_365d === 0) {
-        console.warn(`❌ No trading volume in last year (volume_365d = 0)`);
+    // Reject if yearly trading volume is missing or zero
+    if (stats.volume_365d === null || stats.volume_365d === 0) {
+        console.warn(`❌ No trading volume in last year (volume_365d = ${stats.volume_365d})`);
         return false;
     }
     
