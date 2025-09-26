@@ -43,48 +43,43 @@ const RATE_LIMIT_DELAY = 500; // 500ms between requests
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 
 /**
- * Fetch all unique tokens from wallets in Supabase
+ * Fetch all unique tokens from the tokens table in Supabase
  */
 async function getTokensFromDatabase() {
     try {
         logger.info('📊 Fetching all unique tokens from database...');
         
-        // Get distinct tokens from portfolio snapshots
-        const { data: walletTokens, error: walletError } = await supabase
-            .from('portfolio_snapshots')
-            .select('tokens')
-            .not('tokens', 'is', null);
+        // Get tokens directly from the tokens table
+        const { data: tokenData, error: tokenError } = await supabase
+            .from('tokens')
+            .select('*');
         
-        if (walletError) {
-            throw new Error(`Error fetching tokens from portfolio snapshots: ${walletError.message}`);
+        if (tokenError) {
+            throw new Error(`Error fetching from tokens table: ${tokenError.message}`);
         }
         
-        // Extract unique tokens across all wallets and networks
+        // Extract unique tokens from the tokens table
         const uniqueTokens = {};
         
-        walletTokens.forEach(snapshot => {
-            if (!snapshot.tokens) return;
+        tokenData.forEach(token => {
+            if (!token.contract_address) return;
             
-            // Process each token in the snapshot
-            snapshot.tokens.forEach(token => {
-                if (!token.contractAddress) return;
-                
-                const tokenKey = `${token.contractAddress.toLowerCase()}-${token.networkName?.toLowerCase() || 'unknown'}`;
-                
-                if (!uniqueTokens[tokenKey]) {
-                    uniqueTokens[tokenKey] = {
-                        contractAddress: token.contractAddress.toLowerCase(),
-                        networkName: token.networkName || 'unknown',
-                        symbol: token.symbol || 'unknown',
-                        name: token.name || 'unknown',
-                        lastUpdated: null,
-                        priceUSD: token.priceUSD || 0
-                    };
-                }
-            });
+            const tokenKey = `${token.contract_address.toLowerCase()}-${token.network?.toLowerCase() || 'unknown'}`;
+            
+            if (!uniqueTokens[tokenKey]) {
+                uniqueTokens[tokenKey] = {
+                    contractAddress: token.contract_address.toLowerCase(),
+                    networkName: token.network || 'unknown',
+                    symbol: token.symbol || 'unknown',
+                    name: token.name || 'unknown',
+                    lastUpdated: token.updated_at || null,
+                    decimals: token.decimals || 18,
+                    priceUSD: token.current_price || 0
+                };
+            }
         });
         
-        logger.info(`✅ Found ${Object.keys(uniqueTokens).length} unique tokens across all wallets`);
+        logger.info(`✅ Found ${Object.keys(uniqueTokens).length} unique tokens in database`);
         return Object.values(uniqueTokens);
     } catch (error) {
         logger.error('❌ Error fetching tokens:', error);
@@ -239,19 +234,19 @@ async function getTokenPriceFromDEXScreener(tokenAddress, network) {
  */
 async function updateTokenPrices() {
     try {
-        console.log('🚀 Starting token price update process...');
+        logger.info('🚀 Starting token price update process...');
         
         // Get all tokens from database
         const { data: tokens, error } = await supabase
             .from('tokens')
             .select('*')
-            .order('last_updated', { ascending: true });
+            .order('updated_at', { ascending: true });
             
         if (error) {
             throw new Error(`Error fetching tokens from database: ${error.message}`);
         }
         
-        console.log(`📊 Found ${tokens.length} tokens to check for price updates`);
+        logger.info(`📊 Found ${tokens.length} tokens to check for price updates`);
         
         // Update prices for each token with rate limiting
         let updatedCount = 0;
@@ -272,12 +267,9 @@ async function updateTokenPrices() {
             const { error: updateError } = await supabase
                 .from('tokens')
                 .update({
-                    price_usd: priceData.priceUSD,
-                    last_updated: priceData.timestamp,
-                    dex: priceData.dex,
-                    dex_network: priceData.network,
-                    liquidity_usd: priceData.liquidity,
-                    volume_24h: priceData.volume24h
+                    current_price: priceData.priceUSD,
+                    price_updated_at: priceData.timestamp || new Date().toISOString(),
+                    updated_at: new Date().toISOString()
                 })
                 .eq('contract_address', token.contract_address)
                 .eq('network', token.network);
