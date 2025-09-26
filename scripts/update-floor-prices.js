@@ -156,18 +156,36 @@ const isCollectionActive = (stats, currentFloorPrice = null) => {
     // Check for recent trading volume (30 days) - THIS IS KEY
     if (stats.volume_30d !== undefined && stats.volume_30d !== null && stats.volume_30d === 0) {
         console.warn(`❌ No trading volume in last 30 days (volume_30d = 0)`);
+        
+        // For collections with historical volume but no recent activity (like TwiLifeClub)
+        if (stats.volume_all_time !== undefined && stats.volume_all_time !== null && stats.volume_all_time > 0) {
+            console.warn(`❌ Collection appears inactive: has all-time volume (${stats.volume_all_time}) but no recent activity`);
+            
+            // Check for high owner count - might be a popular collection with temporary inactivity
+            if (stats.owners > 5000) {
+                console.log(`⚠️ High owner count (${stats.owners}) detected despite inactivity`);
+                console.log(`⚖️ Setting floor price to zero for safety but flagging as notable collection`);
+            }
+            
+            return false;
+        }
         return false;
     }
 
     // For null volume_30d (API didn't return data), we should also warn
     if (stats.volume_30d === null) {
-        console.warn(`⚠️ Volume data (30d) is null - this could indicate no recent trading`);
-        // Continue with other checks instead of immediate rejection
+        console.warn(`⚠️ Volume data (30d) is null - checking other activity indicators`);
+        
+        // If there's all-time volume but no 30-day data, check owner count
+        if (stats.volume_all_time > 0 && stats.owners > 1000) {
+            console.log(`⚖️ Missing recent volume data but has significant historical activity`);
+            console.log(`⚖️ Owner count (${stats.owners}) suggests genuine collection - proceeding with caution`);
+        }
     }
     
-    // Reject if yearly trading volume is missing or zero
-    if (stats.volume_365d !== null || stats.volume_365d === 0) {
-        console.warn(`❌ No trading volume in last year (volume_365d = ${stats.volume_365d})`);
+    // Check yearly trading volume if available
+    if (stats.volume_365d !== undefined && stats.volume_365d !== null && stats.volume_365d === 0) {
+        console.warn(`❌ No trading volume in last year (volume_365d = 0)`);
         return false;
     }
     
@@ -243,12 +261,21 @@ const fetchCollectionFloorPrice = async (contractAddress, network = 'ethereum', 
                 // Extract collection statistics for validation using new API fields
                 const stats = {
                     floor_sale_30d: collection.floorSale?.['30day'] || null,
+                    volume_1d: collection.volume?.['1day'] || null,
+                    volume_7d: collection.volume?.['7day'] || null,
                     volume_30d: collection.volume?.['30day'] || null,
+                    volume_90d: collection.volume?.['90day'] || null,
                     volume_365d: collection.volume?.['365day'] || null,
                     volume_all_time: collection.volume?.['allTime'] || null,
                     owners: collection.ownerCount || null,
                     floor_price_usd: floorPriceUSD || null,
-                    is_spam: collection.isSpam || false
+                    is_spam: collection.isSpam || false,
+                    activity: {
+                        sales_1d: collection.nftSales?.['1day'] || null,
+                        sales_7d: collection.nftSales?.['7day'] || null,
+                        sales_30d: collection.nftSales?.['30day'] || null
+                    },
+                    created_date: collection.createdDate || null
                 };
                 
                 // Validate collection activity - set suspicious collections to zero instead of filtering
