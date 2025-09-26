@@ -3,7 +3,7 @@ import axios from 'axios';
 import { format } from 'date-fns';
 import { ScatterChart, Scatter, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell } from 'recharts';
 import { Alchemy, Network } from 'alchemy-sdk';
-import { insertPortfolioSnapshot, insertNftCollections, getCachedFloorPrices, saveWatchedWallets, getWatchedWallets, deleteWatchedWallet } from '../utils/supabase';
+import { insertPortfolioSnapshot, insertNftCollections, insertTokensPerChain, getCachedFloorPrices, saveWatchedWallets, getWatchedWallets, deleteWatchedWallet } from '../utils/supabase';
 
 // APE Staking Contract Addressf
 const STAKING_CONTRACT = '0x4Ba2396086d52cA68a37D9C0FA364286e9c7835a';
@@ -1277,13 +1277,45 @@ function WalletAnalyzer({ account, connectedAccount, onDisconnect, onClearAnalys
             }
             
             // Set token balances - the TokenBalanceDisplay components will calculate and report their totals
-            setTokenBalances({
+            const tokenPortfolio = {
                 ethereum: filteredEthereumBalances,
                 apechain: filteredApeChainBalances,
                 bnb: filteredBnbBalances,
                 solana: filteredSolanaBalances
-            });
+            };
+            
+            setTokenBalances(tokenPortfolio);
             setTokenDataLoaded(true);
+            
+            // Store tokens in Supabase for price tracking
+            try {
+                console.log('🔄 Storing token information in database for price tracking...');
+                
+                // Process each network separately for proper tracking
+                const networks = Object.keys(tokenPortfolio);
+                let totalProcessed = 0;
+                
+                for (const networkKey of networks) {
+                    if (tokenPortfolio[networkKey].length > 0) {
+                        console.log(`💾 Storing ${tokenPortfolio[networkKey].length} tokens for network: ${networkKey}`);
+                        const result = await insertTokensPerChain(tokenPortfolio[networkKey], networkKey, null);
+                        if (result.success) {
+                            totalProcessed += result.data?.length || 0;
+                        } else {
+                            console.warn(`⚠️ Issues storing ${networkKey} tokens:`, result.error);
+                            // If RLS policy error, provide more guidance
+                            if (result.error?.hint) {
+                                console.warn('🔧 Hint:', result.error.hint);
+                            }
+                        }
+                    }
+                }
+                
+                console.log(`✅ Token storage complete: ${totalProcessed} tokens processed`);
+            } catch (err) {
+                console.error('❌ Error storing tokens in database (non-critical):', err);
+                // Non-critical error, don't stop the flow
+            }
         } catch (err) {
             setError('Failed to fetch token balances: ' + err.message);
             console.error('Error fetching token balances:', err);

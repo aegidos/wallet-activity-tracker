@@ -1,0 +1,70 @@
+name: Update Token Prices
+
+on:
+  schedule:
+    # Run every 2 hours at 15 minutes past the hour to avoid peak times
+    - cron: '15 */2 * * *'
+  workflow_dispatch:  # Allow manual triggering from GitHub UI
+    inputs:
+      debug:
+        description: 'Enable debug mode'
+        required: false
+        default: false
+        type: boolean
+
+jobs:
+  update-token-prices:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+      
+      - name: Set up Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: '18'
+          cache: 'npm'
+      
+      - name: Install dependencies
+        run: npm install
+      
+      - name: Create .env file
+        run: |
+          touch .env
+          echo "REACT_APP_SUPABASE_URL=${{ secrets.SUPABASE_URL }}" >> .env
+          echo "REACT_APP_SUPABASE_ANON_KEY=${{ secrets.SUPABASE_ANON_KEY }}" >> .env
+          echo "NEXT_PUBLIC_SUPABASE_URL=${{ secrets.SUPABASE_URL }}" >> .env
+          echo "NEXT_PUBLIC_SUPABASE_ANON_KEY=${{ secrets.SUPABASE_ANON_KEY }}" >> .env
+      
+      - name: Run token price update script
+        env:
+          DEBUG: ${{ github.event.inputs.debug == 'true' }}
+        run: |
+          if [ "$DEBUG" = "true" ]; then
+            node scripts/update-token-prices.js --verbose
+          else
+            node scripts/update-token-prices.js
+          fi
+      
+      - name: Log completion
+        if: ${{ success() }}
+        run: |
+          echo "Token price update completed successfully at $(date)"
+          echo "::set-output name=status::success"
+          echo "::set-output name=time::$(date)"
+      
+      - name: Report failure
+        if: ${{ failure() }}
+        run: |
+          echo "Token price update failed at $(date)"
+          echo "::set-output name=status::failure"
+          echo "::set-output name=time::$(date)"
+          
+      - name: Upload logs on failure
+        if: ${{ failure() }}
+        uses: actions/upload-artifact@v2
+        with:
+          name: token-update-logs
+          path: token-update.log
+          retention-days: 7

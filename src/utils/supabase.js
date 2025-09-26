@@ -389,3 +389,122 @@ export const deleteWatchedWallet = async (userWallet) => {
         return { success: false, error: err.message };
     }
 };
+
+/**
+ * Insert tokens from multiple chains into the tokens table
+ * @param {Object} tokenPortfolio - Object containing token arrays by network
+ * @param {Array} tokenPortfolio.ethereum - Ethereum tokens
+ * @param {Array} tokenPortfolio.apechain - ApeChain tokens
+ * @param {Array} tokenPortfolio.bnb - BNB Chain tokens
+ * @param {Array} tokenPortfolio.solana - Solana tokens
+ * @returns {Promise<Object>} Result of the operation
+ */
+export const insertTokensPerChain = async (tokens, network, userId = null) => {
+    try {
+        if (!Array.isArray(tokens) || tokens.length === 0) {
+            return { success: false, error: "No tokens provided" };
+        }
+
+        const formattedTokens = tokens.map(token => {
+            // For different network formats, the token data might be structured differently
+            const contractAddress = token.contractAddress || token.address || (token.token && (token.token.contractAddress || token.token.address));
+            const symbol = token.symbol || (token.token && token.token.symbol) || 'UNKNOWN';
+            const name = token.name || (token.token && token.token.name) || 'Unknown';
+            const decimalsValue = token.decimals || (token.token && token.token.decimals) || 18;
+
+            return {
+                name: name,
+                symbol: symbol,
+                contract_address: contractAddress,
+                network,
+                // Add decimals if available, otherwise default to 18
+                decimals: decimalsValue,
+                // Add user_id if provided
+                user_id: userId,
+                updated_at: new Date().toISOString()
+            };
+        });
+
+        // Filter out tokens without contract addresses
+        const insertData = formattedTokens.filter(token => 
+            token.contract_address && token.contract_address !== '0x0000000000000000000000000000000000000000'
+        );
+
+        if (insertData.length === 0) {
+            return { success: false, error: "No valid tokens to insert" };
+        }
+
+        console.log(`� Inserting ${insertData.length} tokens for network: ${network}`);
+
+        if (!supabase) {
+            return { success: false, error: "Supabase client not initialized" };
+        }
+
+        try {
+            // Use upsert to handle conflicts (insert only if not exists)
+            const { data, error } = await supabase
+                .from('tokens')
+                .upsert(insertData, { 
+                    onConflict: 'contract_address,network',
+                    ignoreDuplicates: true 
+                })
+                .select();
+
+            if (error) {
+                // Check if it's an RLS policy violation
+                if (error.code === '42501') {
+                    console.error('❌ Row-Level Security policy violation on tokens table:', error.message);
+                    console.error(`
+                    This is a Row-Level Security (RLS) policy error. You need to update the RLS policies 
+                    for the tokens table in your Supabase dashboard. Run the script:
+                    
+                    node scripts/fix-rls-policies.js
+                    
+                    Then follow the instructions to update your RLS policies.
+                    `);
+                    return { 
+                        success: false, 
+                        error: {
+                            ...error,
+                            hint: 'Run node scripts/fix-rls-policies.js to fix RLS policies'
+                        }
+                    };
+                } else if (error.message && error.message.includes('violates not-null constraint')) {
+                    // Check for missing columns issues
+                    console.error('❌ Database schema error:', error.message);
+                    console.error(`
+                    This error indicates a missing or misconfigured column in your tokens table.
+                    Run the script to fix the database schema:
+                    
+                    node scripts/fix-rls-policies.js
+                    
+                    Then follow the instructions to update your tokens table schema.
+                    `);
+                    return {
+                        success: false,
+                        error: {
+                            ...error,
+                            hint: 'Run node scripts/fix-rls-policies.js to fix database schema'
+                        }
+                    };
+                } else {
+                    console.error('❌ Supabase tokens insert error:', error);
+                    return { success: false, error };
+                }
+            }
+
+            return { 
+                success: true, 
+                data,
+                insertedCount: data?.length || 0,
+                network 
+            };
+        } catch (error) {
+            console.error('❌ Unexpected error inserting tokens:', error);
+            return { success: false, error };
+        }
+    } catch (error) {
+        console.error('❌ Error in insertTokensPerChain:', error);
+        return { success: false, error };
+    }
+};
