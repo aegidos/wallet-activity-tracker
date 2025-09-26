@@ -166,7 +166,7 @@ const isCollectionActive = (stats, currentFloorPrice = null) => {
     }
     
     // Reject if yearly trading volume is missing or zero
-    if (stats.volume_365d === null || stats.volume_365d === 0) {
+    if (stats.volume_365d !== null || stats.volume_365d === 0) {
         console.warn(`❌ No trading volume in last year (volume_365d = ${stats.volume_365d})`);
         return false;
     }
