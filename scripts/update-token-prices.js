@@ -92,7 +92,7 @@ async function getTokensFromDatabase() {
  */
 async function syncTokensToDatabase(tokens) {
     try {
-        console.log('📝 Syncing tokens to database...');
+        logger.info('📝 Syncing tokens to database...');
         let count = 0;
         
         // Process tokens in batches to avoid overloading the database
@@ -109,19 +109,21 @@ async function syncTokensToDatabase(tokens) {
                         network: token.networkName,
                         symbol: token.symbol,
                         name: token.name,
-                        last_updated: new Date().toISOString(),
-                        price_usd: token.priceUSD || 0
+                        updated_at: new Date().toISOString(),
+                        price_updated_at: new Date().toISOString(),
+                        current_price: token.priceUSD || 0,
+                        decimals: token.decimals || 18
                     })),
                     { onConflict: 'contract_address,network' }
                 );
                 
             if (error) {
-                console.error(`❌ Error upserting tokens batch: ${error.message}`);
+                logger.error(`❌ Error upserting tokens batch: ${error.message}`);
                 continue;
             }
             
             count += batch.length;
-            console.log(`✅ Synced ${count}/${tokens.length} tokens to database`);
+            logger.info(`✅ Synced ${count}/${tokens.length} tokens to database`);
             
             // Rate limiting
             await delay(100);
@@ -129,7 +131,7 @@ async function syncTokensToDatabase(tokens) {
         
         return count;
     } catch (error) {
-        console.error('❌ Error syncing tokens to database:', error);
+        logger.error('❌ Error syncing tokens to database:', error);
         return 0;
     }
 }
@@ -141,7 +143,7 @@ async function syncTokensToDatabase(tokens) {
  */
 async function getTokenPriceFromDEXScreener(tokenAddress, network) {
     try {
-        console.log(`🔎 Fetching price for ${tokenAddress} on ${network}...`);
+        logger.info(`🔎 Fetching price for ${tokenAddress} on ${network}...`);
         
         // Map network names to what DEXScreener might expect
         const networkMapping = {
@@ -161,7 +163,7 @@ async function getTokenPriceFromDEXScreener(tokenAddress, network) {
         const response = await axios.get(url, { timeout: 10000 });
         
         if (!response.data || !response.data.pairs || response.data.pairs.length === 0) {
-            console.warn(`⚠️ No price data found for ${tokenAddress}`);
+            logger.warn(`⚠️ No price data found for ${tokenAddress}`);
             return null;
         }
         
@@ -203,7 +205,7 @@ async function getTokenPriceFromDEXScreener(tokenAddress, network) {
         }
         
         if (!bestPair) {
-            console.warn(`⚠️ No suitable trading pair found for ${tokenAddress}`);
+            logger.warn(`⚠️ No suitable trading pair found for ${tokenAddress}`);
             return null;
         }
         
@@ -213,7 +215,7 @@ async function getTokenPriceFromDEXScreener(tokenAddress, network) {
         const dex = bestPair.dexId || 'unknown';
         const pairNetwork = bestPair.chainId || 'unknown';
         
-        console.log(`💰 Price: $${priceUSD.toFixed(8)}, Liquidity: $${liquidity}, DEX: ${dex} on ${pairNetwork}`);
+        logger.info(`💰 Price: $${priceUSD.toFixed(8)}, Liquidity: $${liquidity}, DEX: ${dex} on ${pairNetwork}`);
         
         return {
             priceUSD,
@@ -224,7 +226,7 @@ async function getTokenPriceFromDEXScreener(tokenAddress, network) {
             volume24h: typeof volume24h === 'string' ? volume24h : parseFloat(volume24h)
         };
     } catch (error) {
-        console.error(`❌ Error fetching price for ${tokenAddress}: ${error.message}`);
+        logger.error(`❌ Error fetching price for ${tokenAddress}: ${error.message}`);
         return null;
     }
 }
@@ -275,7 +277,7 @@ async function updateTokenPrices() {
                 .eq('network', token.network);
                 
             if (updateError) {
-                console.error(`❌ Error updating price for ${token.contract_address}: ${updateError.message}`);
+                logger.error(`❌ Error updating price for ${token.contract_address}: ${updateError.message}`);
                 continue;
             }
             
@@ -296,7 +298,7 @@ async function updateTokenPrices() {
  */
 async function main() {
     try {
-        console.log('🕒 Starting token sync and price update at', new Date().toISOString());
+        logger.info('🕒 Starting token sync and price update at ' + new Date().toISOString());
         
         // First get all tokens from wallet data
         const allTokens = await getTokensFromDatabase();
