@@ -138,6 +138,8 @@ const isCollectionActive = (stats, currentFloorPrice = null) => {
         owners: stats.owners,
         floorPriceUSD: stats.floor_price_usd,
         isSpam: stats.is_spam,
+        lastTrade: stats.last_trade ? new Date(stats.last_trade).toISOString() : null,
+        lastSaleDate: stats.last_sale_date ? new Date(stats.last_sale_date).toISOString() : null,
         priceRatio: currentFloorPrice && stats.floor_sale_30d ? (currentFloorPrice / stats.floor_sale_30d).toFixed(1) + 'x' : 'N/A'
     });
     
@@ -160,6 +162,23 @@ const isCollectionActive = (stats, currentFloorPrice = null) => {
         // For collections with historical volume but no recent activity (like TwiLifeClub)
         if (stats.volume_all_time !== undefined && stats.volume_all_time !== null && stats.volume_all_time > 0) {
             console.warn(`❌ Collection appears inactive: has all-time volume (${stats.volume_all_time}) but no recent activity`);
+            
+            // Check last sale date if available
+            if (stats.last_sale_date || stats.last_trade) {
+                const lastActivityDate = stats.last_sale_date ? new Date(stats.last_sale_date) : 
+                                         stats.last_trade ? new Date(stats.last_trade) : null;
+                
+                if (lastActivityDate) {
+                    const daysSinceLastActivity = (Date.now() - lastActivityDate.getTime()) / (1000 * 60 * 60 * 24);
+                    console.log(`⏱️ Last activity was ${Math.round(daysSinceLastActivity)} days ago`);
+                    
+                    // If last activity was within the last 60 days, consider it potentially active
+                    if (daysSinceLastActivity < 60) {
+                        console.log(`⚖️ Recent activity detected (within last 60 days)`);
+                        return true;
+                    }
+                }
+            }
             
             // Check for high owner count - might be a popular collection with temporary inactivity
             if (stats.owners > 5000) {
@@ -275,7 +294,10 @@ const fetchCollectionFloorPrice = async (contractAddress, network = 'ethereum', 
                         sales_7d: collection.nftSales?.['7day'] || null,
                         sales_30d: collection.nftSales?.['30day'] || null
                     },
-                    created_date: collection.createdDate || null
+                    created_date: collection.createdDate || null,
+                    // Track last trade info when available
+                    last_trade: collection.floorSale?.lastUpdate || null,
+                    last_sale_date: collection.lastSale?.date || collection.lastSale?.timestamp || null
                 };
                 
                 // Validate collection activity - set suspicious collections to zero instead of filtering
