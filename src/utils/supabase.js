@@ -219,6 +219,8 @@ export const getCachedFloorPrices = async (contractAddresses) => {
             const batch = normalizedAddresses.slice(i, i + BATCH_SIZE);
             console.log(`🔄 Fetching batch ${Math.floor(i/BATCH_SIZE) + 1}/${totalBatches} (${batch.length} addresses)`);
             
+            // Get ALL collections matching the contract addresses
+            // We'll check for floor prices and age later
             const { data, error } = await supabase
                 .from('nft_collections')
                 .select(`
@@ -229,11 +231,10 @@ export const getCachedFloorPrices = async (contractAddresses) => {
                     floor_price_currency,
                     magic_eden_slug,
                     network,
-                    last_floor_price_update
+                    last_floor_price_update,
+                    created_at
                 `)
-                .in('contract_address', batch)
-                .not('floor_price_eth', 'is', null)  // Only get collections that have floor prices
-                .not('floor_price_usd', 'is', null);
+                .in('contract_address', batch);
 
             if (error) {
                 console.error(`❌ Error fetching cached floor prices batch ${Math.floor(i/BATCH_SIZE) + 1}/${totalBatches}:`, error);
@@ -254,32 +255,70 @@ export const getCachedFloorPrices = async (contractAddresses) => {
         const floorPricesMap = {};
         let cachedCount = 0;
         
+        let oldInactiveCount = 0;
+        let activeWithFloorCount = 0;
+        
         allData.forEach(collection => {
             const contractAddress = collection.contract_address.toLowerCase();
+            const hasFloorPrice = collection.floor_price_eth !== null || collection.floor_price_usd !== null;
             
-            floorPricesMap[contractAddress] = {
-                floorPrice: collection.floor_price_eth || collection.floor_price_usd, // Prefer ETH, fallback to USD
-                currency: collection.floor_price_currency || 'ETH',
-                collectionName: collection.collection_name,
-                collectionSlug: collection.magic_eden_slug,
-                priceUSD: collection.floor_price_usd,
-                network: collection.network || 'ethereum',
-                lastUpdated: collection.last_floor_price_update,
-                cached: true // Flag to indicate this came from cache
-            };
+            // Check if collection is old (more than 1 day) but has no floor price
+            const isOldCollection = collection.created_at && 
+                (new Date() - new Date(collection.created_at) > 1 * 24 * 60 * 60 * 1000);
+            const isInactive = isOldCollection && !hasFloorPrice;
             
-            cachedCount++;
-            
-            // Only log some examples to avoid console spam with large collections
-            if (cachedCount <= 5 || cachedCount % 50 === 0) {
-                console.log(`✅ Cached floor price: ${collection.collection_name} = ${collection.floor_price_eth || collection.floor_price_usd} ${collection.floor_price_currency || 'ETH'} ($${collection.floor_price_usd?.toFixed(2) || 'N/A'})`);
+            if (isInactive) {
+                // This is an old collection with no floor price - mark as inactive with zero value
+                floorPricesMap[contractAddress] = {
+                    floorPrice: 0,
+                    currency: 'ETH',
+                    collectionName: collection.collection_name,
+                    collectionSlug: collection.magic_eden_slug,
+                    priceUSD: 0,
+                    network: collection.network || 'ethereum',
+                    lastUpdated: null,
+                    cached: true,
+                    inactive: true // Mark as inactive
+                };
+                
+                oldInactiveCount++;
+                cachedCount++;
+                
+                if (oldInactiveCount <= 3 || oldInactiveCount % 50 === 0) {
+                    console.log(`⚠️ Inactive collection (>1 day old, no floor): ${collection.collection_name}`);
+                }
             }
+            else if (hasFloorPrice) {
+                // Normal case - collection with floor price
+                floorPricesMap[contractAddress] = {
+                    floorPrice: collection.floor_price_eth || collection.floor_price_usd, // Prefer ETH, fallback to USD
+                    currency: collection.floor_price_currency || 'ETH',
+                    collectionName: collection.collection_name,
+                    collectionSlug: collection.magic_eden_slug,
+                    priceUSD: collection.floor_price_usd,
+                    network: collection.network || 'ethereum',
+                    lastUpdated: collection.last_floor_price_update,
+                    cached: true // Flag to indicate this came from cache
+                };
+                
+                activeWithFloorCount++;
+                cachedCount++;
+                
+                // Only log some examples to avoid console spam with large collections
+                if (activeWithFloorCount <= 3 || activeWithFloorCount % 50 === 0) {
+                    console.log(`✅ Cached floor price: ${collection.collection_name} = ${collection.floor_price_eth || collection.floor_price_usd} ${collection.floor_price_currency || 'ETH'} ($${collection.floor_price_usd?.toFixed(2) || 'N/A'})`);
+                }
+            }
+            // Otherwise, if the collection is recent but has no floor price, 
+            // we don't add it to floorPricesMap so it will try to fetch from Magic Eden
         });
 
         const missedCount = contractAddresses.length - cachedCount;
         
         console.log(`💾 Cache lookup summary:`);
         console.log(`   ✅ Found in cache: ${cachedCount}/${contractAddresses.length} collections`);
+        console.log(`   ⚠️ Inactive collections (>2 days old, no floor): ${oldInactiveCount}`);
+        console.log(`   🟢 Active collections with floor price: ${activeWithFloorCount}`);
         if (missedCount > 0) {
             console.log(`   ❌ Cache misses: ${missedCount} collections (will use Magic Eden API)`);
         }

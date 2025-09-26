@@ -827,7 +827,10 @@ function WalletAnalyzer({ account, connectedAccount, onDisconnect, onClearAnalys
             "Apes in Space",
             "MB Coin",
             "Oogear",
-            "ACT"
+            "ACT",
+            "GAS",
+            "YACHT",
+            "SHOW"
             // Add more blacklisted token names/symbols here
         ].map(s => s.toLowerCase()); // normalize to lowercase for comparison
     };
@@ -1582,17 +1585,35 @@ function WalletAnalyzer({ account, connectedAccount, onDisconnect, onClearAnalys
                 // Use cached floor price
                 floorPrices[contractAddress.toLowerCase()] = cachedPrice;
                 
-                successfulFetches.push({
-                    name: cachedPrice.collectionName,
-                    address: contractAddress.slice(0, 8) + '...',
-                    price: `${cachedPrice.floorPrice} ${cachedPrice.currency}`,
-                    priceUSD: cachedPrice.priceUSD ? `$${cachedPrice.priceUSD.toLocaleString()}` : 'N/A',
-                    slug: cachedPrice.collectionSlug,
-                    network: cachedPrice.network,
-                    cached: true
-                });
+                if (cachedPrice.inactive) {
+                    // Handle inactive collections differently in the UI
+                    successfulFetches.push({
+                        name: cachedPrice.collectionName,
+                        address: contractAddress.slice(0, 8) + '...',
+                        price: `0 ${cachedPrice.currency}`,
+                        priceUSD: '$0.00',
+                        slug: cachedPrice.collectionSlug,
+                        network: cachedPrice.network,
+                        cached: true,
+                        inactive: true
+                    });
+                    
+                    console.log(`⚠️ Inactive collection: ${cachedPrice.collectionName} (>1 day with no floor price)`);
+                } else {
+                    // Normal active collection with floor price
+                    successfulFetches.push({
+                        name: cachedPrice.collectionName,
+                        address: contractAddress.slice(0, 8) + '...',
+                        price: `${cachedPrice.floorPrice} ${cachedPrice.currency}`,
+                        priceUSD: cachedPrice.priceUSD ? `$${cachedPrice.priceUSD.toLocaleString()}` : 'N/A',
+                        slug: cachedPrice.collectionSlug,
+                        network: cachedPrice.network,
+                        cached: true
+                    });
+                    
+                    console.log(`💾 Using cached price: ${cachedPrice.collectionName} = ${cachedPrice.floorPrice} ${cachedPrice.currency} ($${cachedPrice.priceUSD?.toFixed(2) || 'N/A'})`);
+                }
                 
-                console.log(`💾 Using cached price: ${cachedPrice.collectionName} = ${cachedPrice.floorPrice} ${cachedPrice.currency} ($${cachedPrice.priceUSD?.toFixed(2) || 'N/A'})`);
                 cachedCount++;
             } else {
                 // Need to fetch from Magic Eden API
@@ -1728,8 +1749,14 @@ function WalletAnalyzer({ account, connectedAccount, onDisconnect, onClearAnalys
         const totalCollections = Object.keys(collectionMap).length;
         const apiCallsCount = requestCount || 0;
         
+        // Count inactive collections
+        const inactiveCount = successfulFetches.filter(item => item.inactive).length;
+        const activeCount = successCount - inactiveCount;
+        
         console.log(`%c🏁 FLOOR PRICE FETCHING SUMMARY 🏁`, 'color: #ffffff; background: #059669; font-weight: bold; padding: 4px 8px; border-radius: 4px;');
         console.log(`%c   ✅ Total found: ${successCount}/${totalCollections} collections`, 'color: #10b981; font-weight: bold;');
+        console.log(`%c   🟢 Active with floor price: ${activeCount} collections`, 'color: #10b981; font-weight: bold;');
+        console.log(`%c   ⚠️ Inactive (zero value): ${inactiveCount} collections`, 'color: #f59e0b; font-weight: bold;');
         console.log(`%c   💾 From cache: ${cachedCount} collections`, 'color: #8b5cf6; font-weight: bold;');
         console.log(`%c   🌐 From API: ${apiCallsCount} collections`, 'color: #3b82f6; font-weight: bold;');
         console.log(`%c   ⚡ API calls saved: ${Math.max(0, totalCollections - apiCallsCount)}`, 'color: #10b981; font-weight: bold;');
@@ -3459,6 +3486,32 @@ function WalletAnalyzer({ account, connectedAccount, onDisconnect, onClearAnalys
                         }
                     }
                     
+                   
+                    
+                    // Check for multi-NFT purchases first - this may be a batch where we need to infer price
+                    const batchNfts = nftByTx[txHash] ? nftByTx[txHash].filter(
+                        n => n.to.toLowerCase() === account.toLowerCase()
+                    ) : [];
+                    const isBatchPurchase = batchNfts.length > 1;
+                    
+                    // Enhanced multi-NFT purchase detection
+                    // For marketplace transactions like Seaport, there might be a single payment for multiple NFTs
+                    if (isBatchPurchase && (purchasePrice === null || purchasePrice === 0)) {
+                        // Look for any payment in the tx first
+                        if (tokenTxsByHash[txHash]) {
+                            const paymentTxs = tokenTxsByHash[txHash].filter(
+                                tt => tt.from.toLowerCase() === account.toLowerCase()
+                            );
+                            if (paymentTxs.length > 0) {
+                                const totalValue = paymentTxs.reduce((sum, tx) => sum + parseFloat(tx.value || 0), 0);
+                                if (totalValue > 0) {
+                                    purchasePrice = totalValue / batchNfts.length;
+                                    purchaseCurrency = paymentTxs[0].tokenSymbol || 'Unknown';
+                                }
+                            }
+                        }
+                    }
+
                     // **NEW LOGIC**: Check if this is a transfer (no payment made)
                     if (purchasePrice === null || purchasePrice === 0) {
                         // This is a transfer, not a purchase - label as Bounty for incoming NFTs
