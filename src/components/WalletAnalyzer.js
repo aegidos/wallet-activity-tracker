@@ -550,6 +550,73 @@ async function requestAccounts() {
 
 function WalletAnalyzer({ account, connectedAccount, onDisconnect, onClearAnalysis, onConnectGlyph }) {
     const [analyzedWallet, setAnalyzedWallet] = useState(account);
+    
+    // Background Operation Notification Component
+    const BackgroundOperationNotification = () => {
+        // Debug: Log notification status
+        console.log('💬 Background notification status:', { isActive: backgroundOperation.active, message: backgroundOperation.message });
+        
+        // Create styles for both visible and hidden states
+        const notificationStyle = {
+            position: 'fixed',
+            bottom: '20px',
+            right: '20px',
+            maxWidth: '350px',
+            backgroundColor: 'rgba(17, 24, 39, 0.95)',
+            color: '#ffffff',
+            padding: '16px',
+            borderRadius: '8px',
+            boxShadow: backgroundOperation.active ? 
+                '0 0 25px rgba(59, 130, 246, 0.6), 0 4px 15px rgba(0, 0, 0, 0.3)' : 
+                '0 0 0 rgba(0, 0, 0, 0)',
+            border: '2px solid #3b82f6',
+            zIndex: 10000,
+            display: backgroundOperation.active ? 'block' : 'none',
+            opacity: backgroundOperation.active ? 1 : 0,
+            transition: 'opacity 0.3s ease-in-out',
+            overflow: 'visible',
+            transform: 'translateZ(0)', // Force hardware acceleration
+        };
+        
+        // Always return the component, but control visibility with CSS
+        return (
+            <div id="background-operation-notification" style={notificationStyle}>
+                <div style={{display: 'flex', alignItems: 'flex-start', gap: '12px'}}>
+                    <div style={{marginTop: '4px'}}>
+                        <div style={{
+                            width: '32px',
+                            height: '32px',
+                            borderRadius: '50%',
+                            border: '2px solid #3b82f6',
+                            borderTopColor: 'transparent',
+                            animation: 'spin 1s linear infinite'
+                        }}></div>
+                    </div>
+                    <div style={{flex: 1}}>
+                        <h3 style={{fontWeight: 500, fontSize: '18px', color: '#93c5fd', marginBottom: '8px'}}>
+                            Background Process Running
+                        </h3>
+                        <p style={{fontSize: '14px', color: '#e5e7eb', marginBottom: '8px'}}>
+                            {backgroundOperation.message || 'Processing data in background...'}
+                        </p>
+                        {backgroundOperation.details && (
+                            <p style={{fontSize: '12px', color: '#fbbf24', marginBottom: '4px'}}>
+                                {backgroundOperation.details}
+                            </p>
+                        )}
+                        <p style={{fontSize: '12px', color: '#9ca3af', marginTop: '8px'}}>
+                            You can continue using the app
+                        </p>
+                    </div>
+                </div>
+                <style jsx>{`
+                    @keyframes spin {
+                        to { transform: rotate(360deg); }
+                    }
+                `}</style>
+            </div>
+        );
+    };
 
     useEffect(() => {
         setAnalyzedWallet(account);
@@ -600,6 +667,13 @@ function WalletAnalyzer({ account, connectedAccount, onDisconnect, onClearAnalys
     const [fetchingFloorPrices, setFetchingFloorPrices] = useState(false);
     const [tokenDataLoaded, setTokenDataLoaded] = useState(false);
     const [processingComplete, setProcessingComplete] = useState(false);
+    const [backgroundOperation, setBackgroundOperation] = useState({
+        active: false,
+        type: null, // 'nft-fetching', 'floor-prices', etc.
+        message: '',
+        details: '',
+        progress: null // { current: 0, total: 0 } for progress bar if needed
+    });
 
     // Navigation state for header menu
     const [activeTab, setActiveTab] = useState('Portfolio');
@@ -1287,8 +1361,64 @@ function WalletAnalyzer({ account, connectedAccount, onDisconnect, onClearAnalys
             });
             
             // Second pass - handle tokens that need prices from the database
+            // Use a simple caching mechanism instead of React hooks
             const fetchDatabasePrices = async () => {
                 try {
+                    // Create a unique identifier for this set of tokens to avoid duplicate fetching
+                    const tokenIdentifiers = [];
+                    Object.entries(tokensNeedingDatabasePrices).forEach(([network, tokens]) => {
+                        tokens.forEach(token => {
+                            const contractAddr = token.contractAddress?.toLowerCase() || token.mint?.toLowerCase();
+                            if (contractAddr) {
+                                tokenIdentifiers.push(`${network}:${contractAddr}`);
+                            }
+                        });
+                    });
+                    
+                    // If no tokens need database prices, skip the process
+                    if (tokenIdentifiers.length === 0) {
+                        console.log('📊 No tokens need database prices');
+                        return 0;
+                    }
+                    
+                    // Create a cache key based on the analyzed wallet and tokens (shortened to avoid storage issues)
+                    const tokenCountKey = Object.entries(tokensNeedingDatabasePrices)
+                        .map(([network, tokens]) => `${network}:${tokens.length}`)
+                        .join(',');
+                    const tokenSetKey = `${analyzedWallet}-${tokenCountKey}-${tokenIdentifiers.length}`;
+                    
+                    // Check if we have a runtime cache in window object
+                    if (!window.databasePriceCache) {
+                        window.databasePriceCache = {};
+                    }
+                    
+                    // Check if we already fetched these prices (using the runtime cache)
+                    if (window.databasePriceCache[tokenSetKey]) {
+                        console.log('📊 Using cached database prices (already fetched for this wallet/token set)');
+                        const cached = window.databasePriceCache[tokenSetKey];
+                        
+                        // Apply cached prices to tokens
+                        for (const network of Object.keys(tokensNeedingDatabasePrices)) {
+                            for (const token of tokensNeedingDatabasePrices[network]) {
+                                const contractAddr = token.contractAddress?.toLowerCase() || token.mint?.toLowerCase();
+                                if (contractAddr && cached.prices[`${network}:${contractAddr}`]) {
+                                    token.databasePrice = cached.prices[`${network}:${contractAddr}`];
+                                }
+                            }
+                        }
+                        
+                        // Update totals with cached data
+                        for (const [network, value] of Object.entries(cached.breakdown)) {
+                            tokenBreakdown[network] += value;
+                        }
+                        totalUSD += cached.additionalValue;
+                        
+                        // Update UI
+                        setTotalUSD(totalUSD);
+                        setTokenBreakdown(tokenBreakdown);
+                        return cached.additionalValue;
+                    }
+                    
                     console.log('📊 Fetching token prices from database for tokens without available prices');
                     
                     // Import the getTokenPrice function
@@ -1304,6 +1434,8 @@ function WalletAnalyzer({ account, connectedAccount, onDisconnect, onClearAnalys
                     };
                     
                     let additionalValue = 0;
+                    const priceCache = {};
+                    const additionalBreakdown = {...tokenBreakdown};
                     
                     // Process tokens for each network
                     for (const network of networks) {
@@ -1333,8 +1465,11 @@ function WalletAnalyzer({ account, connectedAccount, onDisconnect, onClearAnalys
                                 console.log(`💰 Using database price for ${token.symbol || contractAddr} on ${network}: $${price} × ${balance} = $${tokenValue.toFixed(2)}`);
                                 
                                 // Add to totals
-                                tokenBreakdown[network] += tokenValue;
+                                additionalBreakdown[network] += tokenValue;
                                 additionalValue += tokenValue;
+                                
+                                // Cache the price
+                                priceCache[`${network}:${contractAddr}`] = price;
                                 
                                 // Add to token list with price information
                                 token.databasePrice = price;
@@ -1342,12 +1477,19 @@ function WalletAnalyzer({ account, connectedAccount, onDisconnect, onClearAnalys
                         }
                     }
                     
+                    // Store results in runtime cache
+                    window.databasePriceCache[tokenSetKey] = {
+                        prices: priceCache,
+                        additionalValue,
+                        breakdown: additionalBreakdown
+                    };
+                    
                     console.log(`💵 Added $${additionalValue.toFixed(2)} from database token prices to portfolio total`);
                     totalUSD += additionalValue;
                     
                     // Update UI with new total
                     setTotalUSD(totalUSD);
-                    setTokenBreakdown(tokenBreakdown);
+                    setTokenBreakdown(additionalBreakdown);
                     
                     return additionalValue;
                 } catch (error) {
@@ -1460,6 +1602,34 @@ function WalletAnalyzer({ account, connectedAccount, onDisconnect, onClearAnalys
     const fetchNftPortfolio = async () => {
         if (!analyzedWallet) return;
 
+        // Set the background notification immediately when starting NFT fetch
+        console.log('� ACTIVATING NOTIFICATION - NFT FETCH STARTING');
+        
+        // First set to false to ensure state change triggers
+        setBackgroundOperation(prev => {
+            if (prev.active) {
+                return {
+                    ...prev,
+                    active: false
+                };
+            }
+            return prev;
+        });
+        
+        // Force a small delay to ensure state update cycle
+        setTimeout(() => {
+            setBackgroundOperation({
+                active: true,
+                type: 'nft-fetching',
+                message: 'Time-consuming operations are running in the background to fetch live floor prices from the InterPlanetary File System. This may take longer if your wallet has many transactions or NFTs.',
+                details: 'Initializing NFT portfolio analysis...',
+                progress: null
+            });
+            console.log('🔔 Notification state set to active with timeout');
+            
+
+        }, 50);
+
         try {
             console.log('🖼️ Fetching NFT portfolio from multiple networks for:', analyzedWallet);
             
@@ -1486,6 +1656,22 @@ function WalletAnalyzer({ account, connectedAccount, onDisconnect, onClearAnalys
                     do {
                         pageCount++;
                         console.log(`📄 Fetching page ${pageCount} from ${network.displayName}${pageKey ? ` (pageKey: ${pageKey.slice(0, 20)}...)` : ''}...`);
+                        
+                        // Update background operation status - with logging
+                        console.log('🚀 Setting background operation state to ACTIVE');
+                        setBackgroundOperation({
+                            active: true,
+                            type: 'nft-fetching',
+                            message: 'Time-consuming operations are running in the background to fetch live floor prices from the InterPlanetary File System. This may take longer if your wallet has many transactions or NFTs.',
+                            details: `Fetching NFTs from ${network.displayName} (Page ${pageCount})`,
+                            progress: null // We don't know total pages in advance
+                        });
+                        
+                        // Force component update with a setTimeout
+                        setTimeout(() => {
+                            console.log('🔄 Forcing notification state check');
+                            setBackgroundOperation(prev => ({...prev}));
+                        }, 100);
                         
                         const requestOptions = {
                             withMetadata: true,
@@ -1554,9 +1740,17 @@ function WalletAnalyzer({ account, connectedAccount, onDisconnect, onClearAnalys
             // Set NFT portfolio and calculate value after both NFTs and floor prices are loaded
             setNftPortfolio(allNfts);
             
+            // Clear background operation notification when complete
+            console.log('✅ NFT fetching complete - deactivating notification');
+            setBackgroundOperation(prev => ({...prev, active: false}));
+            
         } catch (err) {
             console.error('Error fetching NFT portfolio:', err);
             setError('Failed to fetch NFT portfolio: ' + err.message);
+            
+            // Clear background operation notification on error
+            console.log('❌ NFT fetching failed - deactivating notification');
+            setBackgroundOperation(prev => ({...prev, active: false}));
         }
     };
 
@@ -1565,6 +1759,16 @@ function WalletAnalyzer({ account, connectedAccount, onDisconnect, onClearAnalys
     const fetchFloorPrices = async (collectionMap) => {
         console.log('\n=== 🏷️ Starting Floor Price Fetching (Cache-First Strategy) ===');
         setFetchingFloorPrices(true);
+        
+        // Set background operation for floor price fetching
+        setBackgroundOperation({
+            active: true,
+            type: 'floor-prices',
+            message: 'Time-consuming operations are running in the background to fetch live floor prices from the InterPlanetary File System. This may take longer if your wallet has many transactions or NFTs.',
+            details: `Fetching floor prices for ${Object.keys(collectionMap).length} NFT collections`,
+            progress: null
+        });
+        
         const floorPrices = {};
         const successfulFetches = [];
         const failedFetches = [];
@@ -1818,6 +2022,11 @@ function WalletAnalyzer({ account, connectedAccount, onDisconnect, onClearAnalys
 
         setNftFloorPrices(floorPrices);
         setFetchingFloorPrices(false);
+        
+        // Clear background operation notification when complete
+        console.log('🏷️ Floor price fetching complete - deactivating notification');
+        setBackgroundOperation(prev => ({...prev, active: false}));
+        
         // Calculation will be triggered by useEffect when both nftPortfolio and nftFloorPrices are ready
     };
 
@@ -1943,6 +2152,45 @@ function WalletAnalyzer({ account, connectedAccount, onDisconnect, onClearAnalys
             // Any cleanup if needed
         };
     }, []);
+
+
+    
+    // Force a check of background operations status periodically
+    useEffect(() => {
+        if (backgroundOperation.active) {
+            // Log that the notification should be showing
+            console.log('🎯 Notification SHOULD be visible now', backgroundOperation);
+            
+            // Immediate refresh to ensure render
+            setTimeout(() => {
+                setBackgroundOperation(prev => ({...prev}));
+            }, 10);
+            
+            // Regular interval checks
+            const interval = setInterval(() => {
+                // Refresh the state to ensure UI updates
+                console.log('🔄 Periodic notification refresh check');
+                setBackgroundOperation(prev => ({...prev}));
+                
+                // Verify the DOM element exists and is visible
+                if (typeof document !== 'undefined') {
+                    const notificationElement = document.getElementById('background-operation-notification');
+                    if (notificationElement) {
+                        console.log('📌 DOM Check - Notification element exists:', {
+                            display: window.getComputedStyle(notificationElement).display,
+                            visibility: window.getComputedStyle(notificationElement).visibility,
+                            opacity: window.getComputedStyle(notificationElement).opacity,
+                            zIndex: window.getComputedStyle(notificationElement).zIndex
+                        });
+                    } else {
+                        console.warn('⚠️ Notification element not found in DOM!');
+                    }
+                }
+            }, 2000);
+            
+            return () => clearInterval(interval);
+        }
+    }, [backgroundOperation.active]);
 
     // Fetch token balances and NFT portfolio when analyzed wallet changes
     useEffect(() => {
@@ -4621,7 +4869,7 @@ function WalletAnalyzer({ account, connectedAccount, onDisconnect, onClearAnalys
                 // Use database price if regular price isn't available
                 if ((price === 0 || price === undefined) && token.databasePrice > 0) {
                     price = token.databasePrice;
-                    console.log(`📊 Using database price for ${token.symbol || token.contractAddress} in network total: $${price}`);
+                    // Database price usage is already logged during initial loading, no need to log here
                 }
                 
                 return sum + (balance * price);
@@ -6230,6 +6478,9 @@ function WalletAnalyzer({ account, connectedAccount, onDisconnect, onClearAnalys
                     </div>
                 </div>
             )}
+            
+            {/* Background Operation Notification */}
+            <BackgroundOperationNotification />
         </div>
     );
 }
