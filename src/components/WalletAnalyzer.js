@@ -830,7 +830,8 @@ function WalletAnalyzer({ account, connectedAccount, onDisconnect, onClearAnalys
             "ACT",
             "GAS",
             "YACHT",
-            "SHOW"
+            "SHOW",
+            "AICC"
             // Add more blacklisted token names/symbols here
         ].map(s => s.toLowerCase()); // normalize to lowercase for comparison
     };
@@ -1576,6 +1577,7 @@ function WalletAnalyzer({ account, connectedAccount, onDisconnect, onClearAnalys
         
         // Add cached results to our final results
         let cachedCount = 0;
+        let skippedNullFloorCount = 0;
         const remainingCollections = {};
         
         for (const [contractAddress, collectionData] of Object.entries(collectionMap)) {
@@ -1585,7 +1587,35 @@ function WalletAnalyzer({ account, connectedAccount, onDisconnect, onClearAnalys
                 // Use cached floor price
                 floorPrices[contractAddress.toLowerCase()] = cachedPrice;
                 
-                if (cachedPrice.inactive) {
+                // Check if this is a collection with NULL floor_price_usd that's older than a day
+                if (cachedPrice.floorPriceUSD === null && 
+                    cachedPrice.firstSeenTimestamp && 
+                    (new Date().getTime() - new Date(cachedPrice.firstSeenTimestamp).getTime() > 24 * 60 * 60 * 1000)) {
+                    
+                    // This is a collection in the database with NULL floor price and first seen >1 day ago
+                    // Don't fetch from Magic Eden API - mark as skipped with $0 value
+                    skippedNullFloorCount++;
+                    
+                    // Set zero values for UI display
+                    cachedPrice.floorPrice = 0;
+                    cachedPrice.priceUSD = 0;
+                    cachedPrice.skippedNullFloor = true;
+                    
+                    successfulFetches.push({
+                        name: cachedPrice.collectionName,
+                        address: contractAddress.slice(0, 8) + '...',
+                        price: `0 ${cachedPrice.currency || 'ETH'}`,
+                        priceUSD: '$0.00',
+                        slug: cachedPrice.collectionSlug,
+                        network: cachedPrice.network,
+                        cached: true,
+                        skippedNullFloor: true
+                    });
+                    
+                    console.log(`⏭️ Skipping collection with NULL floor price: ${cachedPrice.collectionName} (in database >1 day with no floor price)`);
+                    
+                    cachedCount++;
+                } else if (cachedPrice.inactive) {
                     // Handle inactive collections differently in the UI
                     successfulFetches.push({
                         name: cachedPrice.collectionName,
@@ -1599,6 +1629,8 @@ function WalletAnalyzer({ account, connectedAccount, onDisconnect, onClearAnalys
                     });
                     
                     console.log(`⚠️ Inactive collection: ${cachedPrice.collectionName} (>1 day with no floor price)`);
+                    
+                    cachedCount++;
                 } else {
                     // Normal active collection with floor price
                     successfulFetches.push({
@@ -1612,9 +1644,9 @@ function WalletAnalyzer({ account, connectedAccount, onDisconnect, onClearAnalys
                     });
                     
                     console.log(`💾 Using cached price: ${cachedPrice.collectionName} = ${cachedPrice.floorPrice} ${cachedPrice.currency} ($${cachedPrice.priceUSD?.toFixed(2) || 'N/A'})`);
+                    
+                    cachedCount++;
                 }
-                
-                cachedCount++;
             } else {
                 // Need to fetch from Magic Eden API
                 remainingCollections[contractAddress] = collectionData;
@@ -1622,6 +1654,7 @@ function WalletAnalyzer({ account, connectedAccount, onDisconnect, onClearAnalys
         }
         
         console.log(`💾 Cache results: ${cachedCount}/${contractAddresses.length} collections found in cache`);
+        console.log(`⏭️ Skipped ${skippedNullFloorCount} collections with NULL floor price that are older than 1 day`);
         
         // Step 2: Fetch remaining collections from Magic Eden API
         const remainingCount = Object.keys(remainingCollections).length;
@@ -1749,14 +1782,15 @@ function WalletAnalyzer({ account, connectedAccount, onDisconnect, onClearAnalys
         const totalCollections = Object.keys(collectionMap).length;
         const apiCallsCount = requestCount || 0;
         
-        // Count inactive collections
+        // Count inactive collections and skipped NULL floor collections
         const inactiveCount = successfulFetches.filter(item => item.inactive).length;
-        const activeCount = successCount - inactiveCount;
+        const activeCount = successCount - inactiveCount - skippedNullFloorCount;
         
         console.log(`%c🏁 FLOOR PRICE FETCHING SUMMARY 🏁`, 'color: #ffffff; background: #059669; font-weight: bold; padding: 4px 8px; border-radius: 4px;');
         console.log(`%c   ✅ Total found: ${successCount}/${totalCollections} collections`, 'color: #10b981; font-weight: bold;');
         console.log(`%c   🟢 Active with floor price: ${activeCount} collections`, 'color: #10b981; font-weight: bold;');
         console.log(`%c   ⚠️ Inactive (zero value): ${inactiveCount} collections`, 'color: #f59e0b; font-weight: bold;');
+        console.log(`%c   ⏭️ Skipped NULL floor >1d: ${skippedNullFloorCount} collections`, 'color: #8b5cf6; font-weight: bold;');
         console.log(`%c   💾 From cache: ${cachedCount} collections`, 'color: #8b5cf6; font-weight: bold;');
         console.log(`%c   🌐 From API: ${apiCallsCount} collections`, 'color: #3b82f6; font-weight: bold;');
         console.log(`%c   ⚡ API calls saved: ${Math.max(0, totalCollections - apiCallsCount)}`, 'color: #10b981; font-weight: bold;');
@@ -2545,6 +2579,10 @@ function WalletAnalyzer({ account, connectedAccount, onDisconnect, onClearAnalys
         // Staking contract constant
         const STAKING_CONTRACT = '0x4ba2396086d52ca68a37d9c0fa364286e9c7835a';
         
+        // IMPORTANT: Always use analyzedWallet (not account) for all transaction comparisons
+        // This ensures we correctly analyze the observed wallet when using watchlist feature
+        const walletToAnalyze = analyzedWallet;
+        
         // Validate all input parameters to prevent undefined errors
         const safeTxData = txData && typeof txData === 'object' ? txData : { status: '0', result: [] };
         const safeNftData = nftData && typeof nftData === 'object' ? nftData : { status: '0', result: [] };
@@ -2615,8 +2653,8 @@ function WalletAnalyzer({ account, connectedAccount, onDisconnect, onClearAnalys
                 if (nftByTx[tx.hash]) {
                     // This transaction has NFT transfers, check if it should be labeled as Trade or NFT Sale
                     const nftsInTx = nftByTx[tx.hash];
-                    const userNftOut = nftsInTx.filter(nft => nft.from.toLowerCase() === account.toLowerCase());
-                    const userNftIn = nftsInTx.filter(nft => nft.to.toLowerCase() === account.toLowerCase());
+                    const userNftOut = nftsInTx.filter(nft => nft.from.toLowerCase() === analyzedWallet.toLowerCase());
+                    const userNftIn = nftsInTx.filter(nft => nft.to.toLowerCase() === analyzedWallet.toLowerCase());
                     
                     // If user is sending NFTs out, check for payment (WAPE marketplace sales)
                     if (userNftOut.length > 0) {
@@ -2627,7 +2665,7 @@ function WalletAnalyzer({ account, connectedAccount, onDisconnect, onClearAnalys
                         
                         if (tokenByTx[tx.hash]) {
                             const incomingTokens = tokenByTx[tx.hash].filter(
-                                tokenTx => tokenTx.to.toLowerCase() === account.toLowerCase() &&
+                                tokenTx => tokenTx.to.toLowerCase() === analyzedWallet.toLowerCase() &&
                                            (tokenTx.tokenSymbol === 'WAPE' || tokenTx.tokenSymbol === 'APE')
                             );
                             
@@ -2694,7 +2732,7 @@ function WalletAnalyzer({ account, connectedAccount, onDisconnect, onClearAnalys
                 // Label as Payment, APE Staked, or Deposit (enhanced logic)
                 let label, outgoingAsset, outgoingAmount, incomingAsset, incomingAmount;
                 
-                if (tx.from.toLowerCase() === account.toLowerCase()) {
+                if (tx.from.toLowerCase() === analyzedWallet.toLowerCase()) {
                     // Calculate APE amount from main transaction
                     let apeAmount = parseInt(tx.value) / 1e18;
                     let isActuallyDeposit = false; // Flag to track if this is really a deposit disguised as payment
@@ -2703,12 +2741,12 @@ function WalletAnalyzer({ account, connectedAccount, onDisconnect, onClearAnalys
                     if (apeAmount === 0 && internalByTx[tx.hash]) {
                         // Check outgoing internal transactions (user is paying)
                         const ourInternalPayments = internalByTx[tx.hash].filter(
-                            itx => itx.from.toLowerCase() === account.toLowerCase()
+                            itx => itx.from.toLowerCase() === analyzedWallet.toLowerCase()
                         );
                         
                         // Check incoming internal transactions (user is receiving - e.g., marketplace sales)
                         const ourInternalReceipts = internalByTx[tx.hash].filter(
-                            itx => itx.to.toLowerCase() === account.toLowerCase()
+                            itx => itx.to.toLowerCase() === analyzedWallet.toLowerCase()
                         );
                         
                         if (ourInternalPayments.length > 0) {
@@ -2807,7 +2845,7 @@ function WalletAnalyzer({ account, connectedAccount, onDisconnect, onClearAnalys
                     // ENHANCEMENT: If main transaction has 0 value, check internal transactions
                     if (apeAmount === 0 && internalByTx[tx.hash]) {
                         const ourInternalDeposits = internalByTx[tx.hash].filter(
-                            itx => itx.to.toLowerCase() === account.toLowerCase()
+                            itx => itx.to.toLowerCase() === walletToAnalyze.toLowerCase()
                         );
                         
                         if (ourInternalDeposits.length > 0) {
@@ -2886,7 +2924,7 @@ function WalletAnalyzer({ account, connectedAccount, onDisconnect, onClearAnalys
                 
                 let label, outgoingAsset, outgoingAmount, incomingAsset, incomingAmount;
                 
-                if (tokenTx.from.toLowerCase() === account.toLowerCase()) {
+                if (tokenTx.from.toLowerCase() === analyzedWallet.toLowerCase()) {
                     label = 'Payment';
                     outgoingAsset = tokenSymbol;
                     outgoingAmount = (parseInt(tokenTx.value) / Math.pow(10, tokenDecimals)).toString();
@@ -2933,11 +2971,11 @@ function WalletAnalyzer({ account, connectedAccount, onDisconnect, onClearAnalys
                 const timestamp = parseInt(nft.timeStamp);
                 const timeKey = Math.floor(timestamp / 60); // Round to nearest minute
                 
-                if (nft.from.toLowerCase() === account.toLowerCase()) {
+                if (nft.from.toLowerCase() === analyzedWallet.toLowerCase()) {
                     // This is an outgoing NFT (potential burn)
                     if (!outgoingByTime[timeKey]) outgoingByTime[timeKey] = [];
                     outgoingByTime[timeKey].push(nft);
-                } else if (nft.to.toLowerCase() === account.toLowerCase() && nft.from.toLowerCase() === ZERO_ADDRESS.toLowerCase()) {
+                } else if (nft.to.toLowerCase() === analyzedWallet.toLowerCase() && nft.from.toLowerCase() === ZERO_ADDRESS.toLowerCase()) {
                     // This is an incoming mint
                     if (!incomingByTime[timeKey]) incomingByTime[timeKey] = [];
                     incomingByTime[timeKey].push(nft);
@@ -3104,13 +3142,13 @@ function WalletAnalyzer({ account, connectedAccount, onDisconnect, onClearAnalys
                 // Skip if this is part of a burn transaction (like Python script)
                 let isPartOfBurn = false;
                 Object.values(burnTransactions).forEach(burnData => {
-                    if (nft.from.toLowerCase() === account.toLowerCase()) {
+                    if (nft.from.toLowerCase() === analyzedWallet.toLowerCase()) {
                         burnData.burned.forEach(burned => {
                             if (burned.tokenID === nft.tokenID && burned.tokenName === nft.tokenName) {
                                 isPartOfBurn = true;
                             }
                         });
-                    } else if (nft.to.toLowerCase() === account.toLowerCase() && nft.from.toLowerCase() === ZERO_ADDRESS.toLowerCase()) {
+                    } else if (nft.to.toLowerCase() === analyzedWallet.toLowerCase() && nft.from.toLowerCase() === ZERO_ADDRESS.toLowerCase()) {
                         burnData.minted.forEach(minted => {
                             if (minted.tokenID === nft.tokenID && minted.tokenName === nft.tokenName) {
                                 isPartOfBurn = true;
@@ -3124,12 +3162,12 @@ function WalletAnalyzer({ account, connectedAccount, onDisconnect, onClearAnalys
                 }
                 
                 // Additional check using burnedTokenIds (like Python)
-                if (nft.from.toLowerCase() === account.toLowerCase() && 
+                if (nft.from.toLowerCase() === analyzedWallet.toLowerCase() && 
                     burnedTokenIds.has(`${nft.tokenName}_${nft.tokenID}`)) {
                     return;
                 }
                 
-                if (nft.from.toLowerCase() === account.toLowerCase()) {
+                if (nft.from.toLowerCase() === analyzedWallet.toLowerCase()) {
                     // Skip if this transaction was already processed as Trade
                     if (processedAsTrade.has(nft.hash)) {
                         return;
@@ -3151,7 +3189,7 @@ function WalletAnalyzer({ account, connectedAccount, onDisconnect, onClearAnalys
                     // Check token transfers for this transaction (prioritize WAPE/APE tokens)
                     if (tokenByTx[txHash]) {
                         const incomingTokens = tokenByTx[txHash].filter(
-                            tx => tx.to.toLowerCase() === account.toLowerCase()
+                            tx => tx.to.toLowerCase() === analyzedWallet.toLowerCase()
                         );
                         
                         if (incomingTokens.length > 0) {
@@ -3178,12 +3216,12 @@ function WalletAnalyzer({ account, connectedAccount, onDisconnect, onClearAnalys
                     // If no token transfer found, check internal transactions
                     if (paymentAmount === null && internalByTx[txHash]) {
                         const ourInternalTxs = internalByTx[txHash].filter(
-                            itx => itx.to.toLowerCase() === account.toLowerCase()
+                            itx => itx.to.toLowerCase() === walletToAnalyze.toLowerCase()
                         );
                         
                         // Get all NFTs sold in this batch
                         const batchNfts = nftByTx[txHash] ? nftByTx[txHash].filter(
-                            n => n.from.toLowerCase() === account.toLowerCase()
+                            n => n.from.toLowerCase() === walletToAnalyze.toLowerCase()
                         ) : [];
                         
                         if (ourInternalTxs.length === batchNfts.length) {
@@ -3277,12 +3315,12 @@ function WalletAnalyzer({ account, connectedAccount, onDisconnect, onClearAnalys
                         // Method 1: Check if there are token transfers (ERC-20 payments)
                         if (tokenByTx[txHash]) {
                             const ourTokenTxs = tokenByTx[txHash].filter(
-                                tx => tx.from.toLowerCase() === account.toLowerCase()
+                                tx => tx.from.toLowerCase() === walletToAnalyze.toLowerCase()
                             );
                             
                             // Get all NFTs minted in this batch from zero address
                             const batchMints = nftByTx[txHash] ? nftByTx[txHash].filter(
-                                n => n.to.toLowerCase() === account.toLowerCase() && 
+                                n => n.to.toLowerCase() === analyzedWallet.toLowerCase() && 
                                      n.from.toLowerCase() === ZERO_ADDRESS.toLowerCase()
                             ) : [];
                             
@@ -3306,9 +3344,9 @@ function WalletAnalyzer({ account, connectedAccount, onDisconnect, onClearAnalys
                         // Method 2: Check if there's a payment transaction (APE native currency)
                         if (mintPrice === null && mintCurrency === null && txsById[txHash]) {
                             const paymentTx = txsById[txHash];
-                            if (paymentTx.from.toLowerCase() === account.toLowerCase()) {
+                            if (paymentTx.from.toLowerCase() === analyzedWallet.toLowerCase()) {
                                 const batchMints = nftByTx[txHash] ? nftByTx[txHash].filter(
-                                    n => n.to.toLowerCase() === account.toLowerCase() && 
+                                    n => n.to.toLowerCase() === analyzedWallet.toLowerCase() && 
                                          n.from.toLowerCase() === ZERO_ADDRESS.toLowerCase()
                                 ) : [];
                                 
@@ -3324,11 +3362,11 @@ function WalletAnalyzer({ account, connectedAccount, onDisconnect, onClearAnalys
                         // Method 3: Check internal transactions (MOST IMPORTANT FOR SKID CITY CASE)
                         if (mintPrice === null && mintCurrency === null && internalByTx[txHash]) {
                             const ourInternalPayments = internalByTx[txHash].filter(
-                                itx => itx.from.toLowerCase() === account.toLowerCase()
+                                itx => itx.from.toLowerCase() === walletToAnalyze.toLowerCase()
                             );
                             
                             const batchMints = nftByTx[txHash] ? nftByTx[txHash].filter(
-                                n => n.to.toLowerCase() === account.toLowerCase() && 
+                                n => n.to.toLowerCase() === walletToAnalyze.toLowerCase() && 
                                      n.from.toLowerCase() === ZERO_ADDRESS.toLowerCase()
                             ) : [];
                             
@@ -3375,7 +3413,7 @@ function WalletAnalyzer({ account, connectedAccount, onDisconnect, onClearAnalys
                         let comment = `Token ID: ${nft.tokenID} - Collection: ${nft.tokenName}`;
                         if (isPaidMint) {
                             const batchMints = nftByTx[txHash] ? nftByTx[txHash].filter(
-                                n => n.to.toLowerCase() === account.toLowerCase() && 
+                                n => n.to.toLowerCase() === walletToAnalyze.toLowerCase() && 
                                      n.from.toLowerCase() === ZERO_ADDRESS.toLowerCase()
                             ).length : 1;
                             
@@ -3416,11 +3454,11 @@ function WalletAnalyzer({ account, connectedAccount, onDisconnect, onClearAnalys
                     // Method 1: Check if there are token transfers for this transaction
                     if (tokenByTx[txHash]) {
                         const ourTokenTxs = tokenByTx[txHash].filter(
-                            tx => tx.from.toLowerCase() === account.toLowerCase()
+                            tx => tx.from.toLowerCase() === walletToAnalyze.toLowerCase()
                         );
                         
                         const batchNfts = nftByTx[txHash] ? nftByTx[txHash].filter(
-                            n => n.to.toLowerCase() === account.toLowerCase()
+                            n => n.to.toLowerCase() === walletToAnalyze.toLowerCase()
                         ) : [];
                         
                         // If there's any token transfer, use that as the currency
@@ -3448,9 +3486,9 @@ function WalletAnalyzer({ account, connectedAccount, onDisconnect, onClearAnalys
                     // Method 2: Check if there's a payment transaction (APE native currency)
                     if (purchasePrice === null && purchaseCurrency === null && txsById[txHash]) {
                         const paymentTx = txsById[txHash];
-                        if (paymentTx.from.toLowerCase() === account.toLowerCase()) {
+                        if (paymentTx.from.toLowerCase() === walletToAnalyze.toLowerCase()) {
                             const batchNfts = nftByTx[txHash] ? nftByTx[txHash].filter(
-                                n => n.to.toLowerCase() === account.toLowerCase()
+                                n => n.to.toLowerCase() === walletToAnalyze.toLowerCase()
                             ) : [];
                             if (batchNfts.length > 0) {
                                 purchasePrice = parseInt(paymentTx.value) / 1e18 / batchNfts.length;
@@ -3462,11 +3500,11 @@ function WalletAnalyzer({ account, connectedAccount, onDisconnect, onClearAnalys
                     // Method 3: Check internal transactions
                     if (purchasePrice === null && purchaseCurrency === null && internalByTx[txHash]) {
                         const ourInternalPayments = internalByTx[txHash].filter(
-                            itx => itx.from.toLowerCase() === account.toLowerCase()
+                            itx => itx.from.toLowerCase() === walletToAnalyze.toLowerCase()
                         );
                         
                         const batchNfts = nftByTx[txHash] ? nftByTx[txHash].filter(
-                            n => n.to.toLowerCase() === account.toLowerCase()
+                            n => n.to.toLowerCase() === walletToAnalyze.toLowerCase()
                         ) : [];
                         
                         if (ourInternalPayments.length > 0) {
@@ -3490,7 +3528,7 @@ function WalletAnalyzer({ account, connectedAccount, onDisconnect, onClearAnalys
                     
                     // Check for multi-NFT purchases first - this may be a batch where we need to infer price
                     const batchNfts = nftByTx[txHash] ? nftByTx[txHash].filter(
-                        n => n.to.toLowerCase() === account.toLowerCase()
+                        n => n.to.toLowerCase() === walletToAnalyze.toLowerCase()
                     ) : [];
                     const isBatchPurchase = batchNfts.length > 1;
                     
@@ -3498,9 +3536,9 @@ function WalletAnalyzer({ account, connectedAccount, onDisconnect, onClearAnalys
                     // For marketplace transactions like Seaport, there might be a single payment for multiple NFTs
                     if (isBatchPurchase && (purchasePrice === null || purchasePrice === 0)) {
                         // Look for any payment in the tx first
-                        if (tokenTxsByHash[txHash]) {
-                            const paymentTxs = tokenTxsByHash[txHash].filter(
-                                tt => tt.from.toLowerCase() === account.toLowerCase()
+                        if (tokenByTx[txHash]) {
+                            const paymentTxs = tokenByTx[txHash].filter(
+                                tt => tt.from.toLowerCase() === walletToAnalyze.toLowerCase()
                             );
                             if (paymentTxs.length > 0) {
                                 const totalValue = paymentTxs.reduce((sum, tx) => sum + parseFloat(tx.value || 0), 0);
@@ -4379,7 +4417,7 @@ function WalletAnalyzer({ account, connectedAccount, onDisconnect, onClearAnalys
             
             if (response.data.status === '1' && Array.isArray(response.data.result)) {
                 console.log(`📊 Found ${response.data.result.length} internal transactions, checking for rewards from all contracts...`);
-                console.log('🔍 Target account:', account.toLowerCase());
+                console.log('🔍 Target account:', walletToAnalyze.toLowerCase());
                 console.log('🔍 Target staking contract:', STAKING_CONTRACT.toLowerCase());
                 
                 const apeChurchRewardsData = [];
@@ -4387,7 +4425,7 @@ function WalletAnalyzer({ account, connectedAccount, onDisconnect, onClearAnalys
                 
                 for (const tx of response.data.result) {
                     // Check if this is from any of our tracked contracts TO our wallet
-                    if (tx.to.toLowerCase() === account.toLowerCase()) {
+                    if (tx.to.toLowerCase() === walletToAnalyze.toLowerCase()) {
                         const rewardAmount = parseInt(tx.value) / 1e18;
                         
                         // Debug logging for all internal transactions to this wallet
@@ -4883,12 +4921,24 @@ function WalletAnalyzer({ account, connectedAccount, onDisconnect, onClearAnalys
                             background: 'rgba(255, 255, 255, 0.05)',
                             padding: screenSize.isMobile ? '0.3rem 0.6rem' : '0.4rem 0.8rem',
                             borderRadius: '8px',
-                            border: '1px solid rgba(255, 255, 255, 0.1)'
+                            border: '1px solid rgba(255, 255, 255, 0.1)',
+                            display: 'flex',
+                            gap: '8px'
                         }}>
                             {account ? 
                                 `${account.slice(0, 6)}...${account.slice(-4)}` : 
                                 'No wallet connected'
                             }
+                            
+                            {/* Show observed wallet indicator if different from connected account */}
+                            {analyzedWallet && account && analyzedWallet !== account && (
+                                <>
+                                    <span style={{ color: '#f59e0b', opacity: 0.8 }}>|</span>
+                                    <span style={{ color: '#f59e0b' }}>
+                                        Obs: {analyzedWallet.slice(0, 6)}...{analyzedWallet.slice(-4)}
+                                    </span>
+                                </>
+                            )}
                         </div>
                         
                         {/* Status/Loading Indicator */}

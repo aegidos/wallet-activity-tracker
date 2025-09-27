@@ -156,14 +156,23 @@ const isCollectionActive = (stats, currentFloorPrice = null) => {
     }
     
     // Check for recent trading volume (30 days) - THIS IS KEY
-    if (stats.volume_30d !== undefined && stats.volume_30d !== null && stats.volume_30d === 0) {
-        console.warn(`❌ No trading volume in last 30 days (volume_30d = 0)`);
+    // UPDATED: Always return false for collections with no recent volume (zero or null)
+    if (stats.volume_30d === 0 || stats.volume_30d === null || stats.volume_30d === undefined) {
+        console.warn(`❌ No trading volume in last 30 days`);
         
-        // For collections with historical volume but no recent activity (like TwiLifeClub)
+        if (stats.volume_30d === 0) {
+            console.warn(`❌ volume_30d = 0 - Setting floor price to zero`);
+        } else if (stats.volume_30d === null) {
+            console.warn(`❌ volume_30d = null - Setting floor price to zero`);
+        } else {
+            console.warn(`❌ volume_30d undefined - Setting floor price to zero`);
+        }
+        
+        // Log additional context about the collection for monitoring purposes
         if (stats.volume_all_time !== undefined && stats.volume_all_time !== null && stats.volume_all_time > 0) {
-            console.warn(`❌ Collection appears inactive: has all-time volume (${stats.volume_all_time}) but no recent activity`);
+            console.warn(`⚠️ Collection appears inactive: has all-time volume (${stats.volume_all_time}) but no recent activity`);
             
-            // Check last sale date if available
+            // Check last sale date if available (for informational purposes only)
             if (stats.last_sale_date || stats.last_trade) {
                 const lastActivityDate = stats.last_sale_date ? new Date(stats.last_sale_date) : 
                                          stats.last_trade ? new Date(stats.last_trade) : null;
@@ -171,35 +180,18 @@ const isCollectionActive = (stats, currentFloorPrice = null) => {
                 if (lastActivityDate) {
                     const daysSinceLastActivity = (Date.now() - lastActivityDate.getTime()) / (1000 * 60 * 60 * 24);
                     console.log(`⏱️ Last activity was ${Math.round(daysSinceLastActivity)} days ago`);
-                    
-                    // If last activity was within the last 60 days, consider it potentially active
-                    if (daysSinceLastActivity < 60) {
-                        console.log(`⚖️ Recent activity detected (within last 60 days)`);
-                        return true;
-                    }
                 }
             }
             
-            // Check for high owner count - might be a popular collection with temporary inactivity
+            // Note high owner count collections for reference
             if (stats.owners > 5000) {
                 console.log(`⚠️ High owner count (${stats.owners}) detected despite inactivity`);
-                console.log(`⚖️ Setting floor price to zero for safety but flagging as notable collection`);
+                console.log(`⚖️ Setting floor price to zero as requested (volume_30d is ${stats.volume_30d})`);
             }
-            
-            return false;
         }
-        return false;
-    }
-
-    // For null volume_30d (API didn't return data), we should also warn
-    if (stats.volume_30d === null) {
-        console.warn(`⚠️ Volume data (30d) is null - checking other activity indicators`);
         
-        // If there's all-time volume but no 30-day data, check owner count
-        if (stats.volume_all_time > 0 && stats.owners > 1000) {
-            console.log(`⚖️ Missing recent volume data but has significant historical activity`);
-            console.log(`⚖️ Owner count (${stats.owners}) suggests genuine collection - proceeding with caution`);
-        }
+        // Always return false for collections with no 30-day volume
+        return false;
     }
     
     // Check yearly trading volume if available
