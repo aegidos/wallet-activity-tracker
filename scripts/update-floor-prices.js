@@ -23,6 +23,7 @@ const supabase = createClient(supabaseUrl, supabaseKey);
 
 // Magic Eden API configuration
 const RATE_LIMIT_DELAY = 500; // 500ms between requests (2 requests/second)
+const SKIP_INACTIVE_COLLECTIONS = true; // Skip collections previously marked as inactive
 
 /**
  * Delay function for rate limiting
@@ -46,7 +47,7 @@ const getAllNftCollections = async () => {
             
             const { data, error } = await supabase
                 .from('nft_collections')
-                .select('contract_address, collection_name, network, last_floor_price_update')
+                .select('contract_address, collection_name, network, last_floor_price_update, "ISACTIVE"')
                 .range(from, from + pageSize - 1)
                 .order('collection_name');
             
@@ -73,6 +74,13 @@ const getAllNftCollections = async () => {
         }
         
         console.log(`✅ Found ${allCollections.length} total collections in database`);
+        
+        // Filter out inactive collections if SKIP_INACTIVE_COLLECTIONS is enabled
+        if (SKIP_INACTIVE_COLLECTIONS) {
+            const activeCollections = allCollections.filter(collection => collection.ISACTIVE !== false);
+            console.log(`⏭️ Filtered out ${allCollections.length - activeCollections.length} inactive collections`);
+            allCollections = activeCollections;
+        }
         
         // Add debug logging for tokengators specifically
         console.log('\n🔍 Debugging: Searching for tokengators collections...');
@@ -308,7 +316,8 @@ const fetchCollectionFloorPrice = async (contractAddress, network = 'ethereum', 
                         network: network,
                         lastUpdated: new Date().toISOString(),
                         validationStats: stats,
-                        suspicious: true // Flag for tracking
+                        suspicious: true, // Flag for tracking
+                        isActive: false   // Collection is inactive
                     };
                 } else {
                     console.log(`✅ ${collectionName}: ${floorPrice} ${currency} ($${floorPriceUSD?.toLocaleString() || 'N/A'}) - VALIDATED`);
@@ -322,7 +331,8 @@ const fetchCollectionFloorPrice = async (contractAddress, network = 'ethereum', 
                         network: network,
                         lastUpdated: new Date().toISOString(),
                         validationStats: stats,
-                        suspicious: false
+                        suspicious: false,
+                        isActive: true   // Collection is active
                     };
                 }
             } else {
@@ -468,7 +478,8 @@ const updateFloorPrices = async (floorPriceData) => {
                     floor_price_usd: priceData.floorPriceUSD,
                     floor_price_currency: priceData.currency,
                     magic_eden_slug: priceData.magicEdenSlug,
-                    last_floor_price_update: priceData.lastUpdated
+                    last_floor_price_update: priceData.lastUpdated,
+                    "ISACTIVE": priceData.isActive !== false // Update activity status
                 })
                 .eq('contract_address', priceData.contractAddress)
                 .select();
