@@ -102,7 +102,7 @@ export const insertNftCollections = async (nftPortfolio) => {
     }
 
     if (!nftPortfolio || nftPortfolio.length === 0) {
-        console.log('📝 No NFT collections to insert');
+        // No NFT collections to insert
         return { success: true, data: [] };
     }
 
@@ -111,7 +111,7 @@ export const insertNftCollections = async (nftPortfolio) => {
         // NFT objects have structure: { contract: { address, name }, ... }
         const uniqueCollections = new Map();
         
-        console.log(`📝 Processing ${nftPortfolio.length} NFTs for collection extraction...`);
+        // Processing NFTs for collection extraction
         
         nftPortfolio.forEach((nft, index) => {
             // Debug first few NFTs to understand structure
@@ -144,21 +144,19 @@ export const insertNftCollections = async (nftPortfolio) => {
                     first_seen_timestamp: new Date().toISOString()
                 });
                 
-                console.log(`📋 Found collection: ${collectionName} on ${network} (${contractAddress.slice(0, 8)}...)`);
+                // Collection identified
             }
         });
 
         const insertData = Array.from(uniqueCollections.values());
         
         if (insertData.length === 0) {
-            console.log('📝 No valid NFT collections to insert');
+            // No valid NFT collections to insert
             return { success: true, data: [] };
         }
 
-        console.log(`📝 Attempting to insert ${insertData.length} unique NFT collections:`);
-        insertData.forEach(collection => {
-            console.log(`  - ${collection.collection_name} (${collection.contract_address.slice(0, 8)}...)`);
-        });
+        // Inserting unique NFT collections
+        // Collection data prepared for insertion
 
         // Use upsert to handle conflicts (insert only if not exists)
         const { data, error } = await supabase
@@ -175,7 +173,7 @@ export const insertNftCollections = async (nftPortfolio) => {
         }
 
         const insertedCount = data?.length || 0;
-        console.log(`✅ NFT collections processed: ${insertedCount} new records inserted/updated`);
+        // NFT collections processed and records inserted/updated
         
         return { success: true, data, insertedCount };
 
@@ -202,7 +200,7 @@ export const getCachedFloorPrices = async (contractAddresses) => {
     }
 
     try {
-        console.log(`📊 Fetching cached floor prices from Supabase for ${contractAddresses.length} collections...`);
+        // Fetching cached floor prices from Supabase
         
         // Convert all addresses to lowercase for consistent matching
         const normalizedAddresses = contractAddresses.map(addr => addr.toLowerCase());
@@ -285,7 +283,7 @@ export const getCachedFloorPrices = async (contractAddresses) => {
                 cachedCount++;
                 
                 if (oldInactiveCount <= 3 || oldInactiveCount % 50 === 0) {
-                    console.log(`⚠️ Inactive collection (>1 day old, no floor): ${collection.collection_name}`);
+                    // Inactive collection identified
                 }
             }
             else if (hasFloorPrice) {
@@ -306,7 +304,7 @@ export const getCachedFloorPrices = async (contractAddresses) => {
                 
                 // Only log some examples to avoid console spam with large collections
                 if (activeWithFloorCount <= 3 || activeWithFloorCount % 50 === 0) {
-                    console.log(`✅ Cached floor price: ${collection.collection_name} = ${collection.floor_price_eth || collection.floor_price_usd} ${collection.floor_price_currency || 'ETH'} ($${collection.floor_price_usd?.toFixed(2) || 'N/A'})`);
+                    // Retrieved cached floor price
                 }
             }
             // Otherwise, if the collection is recent but has no floor price, 
@@ -316,11 +314,9 @@ export const getCachedFloorPrices = async (contractAddresses) => {
         const missedCount = contractAddresses.length - cachedCount;
         
         console.log(`💾 Cache lookup summary:`);
-        console.log(`   ✅ Found in cache: ${cachedCount}/${contractAddresses.length} collections`);
-        console.log(`   ⚠️ Inactive collections (>2 days old, no floor): ${oldInactiveCount}`);
-        console.log(`   🟢 Active collections with floor price: ${activeWithFloorCount}`);
+        // Cache summary: found collections, inactive collections, active collections
         if (missedCount > 0) {
-            console.log(`   ❌ Cache misses: ${missedCount} collections (will use Magic Eden API)`);
+            // Cache misses requiring API calls
         }
         
         return floorPricesMap;
@@ -480,7 +476,7 @@ export const getTokenPrice = async (contractAddress, network) => {
     }
 
     try {
-        console.log(`🔍 Looking up token price for ${contractAddress} on ${network}`);
+        // console.log(`🔍 Looking up token price for ${contractAddress} on ${network}`);
         
         // Normalize address to lowercase
         const normalizedAddress = contractAddress.toLowerCase();
@@ -502,7 +498,7 @@ export const getTokenPrice = async (contractAddress, network) => {
             return { success: false, error: 'Token not found' };
         }
 
-        console.log(`✅ Found token price for ${data[0].symbol}: $${data[0].current_price || 'N/A'}`);
+        // console.log(`✅ Found token price for ${data[0].symbol}: $${data[0].current_price || 'N/A'}`);
         return { success: true, data: data[0] };
 
     } catch (err) {

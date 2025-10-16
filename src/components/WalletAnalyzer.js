@@ -905,7 +905,8 @@ function WalletAnalyzer({ account, connectedAccount, onDisconnect, onClearAnalys
             "GAS",
             "YACHT",
             "SHOW",
-            "AICC"
+            "AICC",
+            "以太AI"
             // Add more blacklisted token names/symbols here
         ].map(s => s.toLowerCase()); // normalize to lowercase for comparison
     };
