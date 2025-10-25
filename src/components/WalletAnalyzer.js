@@ -906,7 +906,9 @@ function WalletAnalyzer({ account, connectedAccount, onDisconnect, onClearAnalys
             "YACHT",
             "SHOW",
             "AICC",
-            "以太AI"
+            "以太AI",
+            "XMOVE",
+            "ETHG"
             // Add more blacklisted token names/symbols here
         ].map(s => s.toLowerCase()); // normalize to lowercase for comparison
     };
@@ -2900,7 +2902,7 @@ function WalletAnalyzer({ account, connectedAccount, onDisconnect, onClearAnalys
                 
                 // ENHANCEMENT: Check if this transaction contains NFT transfers
                 if (nftByTx[tx.hash]) {
-                    // This transaction has NFT transfers, check if it should be labeled as Trade or NFT Sale
+                    // This transaction has NFT transfers, check if it should be labeled as Trade or Trade
                     const nftsInTx = nftByTx[tx.hash];
                     const userNftOut = nftsInTx.filter(nft => nft.from.toLowerCase() === analyzedWallet.toLowerCase());
                     const userNftIn = nftsInTx.filter(nft => nft.to.toLowerCase() === analyzedWallet.toLowerCase());
@@ -2930,17 +2932,41 @@ function WalletAnalyzer({ account, connectedAccount, onDisconnect, onClearAnalys
                         
                         // If no token payment and no native APE payment, it's a transfer
                         if (!hasTokenPayment && parseInt(tx.value) === 0) {
+                            // Calculate fee for this transaction
+                            const gasPrice = tx.gasPrice || tx.gasPriceBid || '0';
+                            let feeAmount = '';
+                            try {
+                                feeAmount = (parseInt(tx.gasUsed) * parseInt(gasPrice) / 1e18).toString();
+                            } catch (e) {
+                                feeAmount = '';
+                            }
+                            const feeAsset = feeAmount && parseFloat(feeAmount) > 0 ? 'APE' : '';
+                            
+                            // Check if any of the NFTs being sent are Multi Ball, Price Ticket, or Trench Pickles
+                            const hasSpecialCollection = userNftOut.some(nft => {
+                                const collectionName = (nft.tokenName || '').toLowerCase();
+                                return collectionName.includes('multi ball') || collectionName.includes('price ticket') || collectionName.includes('trench pickles');
+                            });
+                            
+                            // Check if any NFT is being sent to the burn address
+                            const BURN_ADDRESS = '0x000000000000000000000000000000000000dead';
+                            const isSentToBurnAddress = userNftOut.some(nft => 
+                                nft.to && nft.to.toLowerCase() === BURN_ADDRESS
+                            );
+                            
+                            const label = (hasSpecialCollection || isSentToBurnAddress) ? 'Lost' : 'Gift Sent';
+                            
                             processedAsTrade.add(tx.hash); // Track this transaction
                             transactions.push({
                                 hash: tx.hash,
                                 date: date,
-                                label: 'Trade',
+                                label: label,
                                 outgoingAsset: 'NFT',
                                 outgoingAmount: userNftOut.length.toString(),
                                 incomingAsset: '',
                                 incomingAmount: '',
-                                feeAsset: '',
-                                feeAmount: '',
+                                feeAsset: feeAsset,
+                                feeAmount: feeAmount,
                                 comment: `NFT Transfer (Out) - ${userNftOut.length} NFT(s) transferred: ${userNftOut.map(nft => `${nft.tokenName} #${nft.tokenID}`).join(', ')}`,
                                 type: 'nft',
                                 tokenId: userNftOut[0].tokenID,
@@ -2950,24 +2976,46 @@ function WalletAnalyzer({ account, connectedAccount, onDisconnect, onClearAnalys
                             return; // Skip regular transaction processing
                         } else if (hasTokenPayment) {
                             // This is a WAPE marketplace sale - let the NFT processing handle it properly
-                            console.log(`✅ WAPE marketplace sale detected - will be processed as NFT Sale by NFT handler`);
+                            console.log(`✅ WAPE marketplace sale detected - will be processed as Trade by NFT handler`);
                             // Don't add to processedAsTrade, let NFT processing handle it
                         }
                     }
                     
                     // If user is receiving NFTs (and no payment made), label as Trade
                     if (userNftIn.length > 0 && parseInt(tx.value) === 0) {
+                        // Calculate fee for this transaction
+                        const gasPrice = tx.gasPrice || tx.gasPriceBid || '0';
+                        let feeAmount = '';
+                        try {
+                            feeAmount = (parseInt(tx.gasUsed) * parseInt(gasPrice) / 1e18).toString();
+                        } catch (e) {
+                            feeAmount = '';
+                        }
+                        const feeAsset = feeAmount && parseFloat(feeAmount) > 0 ? 'APE' : '';
+                        
+                        // Check if any NFT is coming from the zero address (mint/gift) or the gift contract
+                        const ZERO_ADDRESS = '0x0000000000000000000000000000000000000000';
+                        const GIFT_CONTRACT = '0x80d7E042b059702153246D52DBd38bA1A5419847';
+                        const isFromZeroAddress = userNftIn.some(nft => 
+                            nft.from && nft.from.toLowerCase() === ZERO_ADDRESS.toLowerCase()
+                        );
+                        const isFromGiftContract = userNftIn.some(nft =>
+                            nft.from && nft.from.toLowerCase() === GIFT_CONTRACT.toLowerCase()
+                        );
+                        
+                        const label = (isFromZeroAddress || isFromGiftContract) ? 'Gift Received' : 'Trade';
+                        
                         processedAsTrade.add(tx.hash); // Track this transaction
                         transactions.push({
                             hash: tx.hash,
                             date: date,
-                            label: 'Trade',
+                            label: label,
                             outgoingAsset: '',
                             outgoingAmount: '',
                             incomingAsset: 'NFT',
                             incomingAmount: userNftIn.length.toString(),
-                            feeAsset: '',
-                            feeAmount: '',
+                            feeAsset: feeAsset,
+                            feeAmount: feeAmount,
                             comment: `NFT Transfer (In) - ${userNftIn.length} NFT(s) received: ${userNftIn.map(nft => `${nft.tokenName} #${nft.tokenID}`).join(', ')}`,
                             type: 'nft',
                             tokenId: userNftIn[0].tokenID,
@@ -3131,6 +3179,26 @@ function WalletAnalyzer({ account, connectedAccount, onDisconnect, onClearAnalys
                 }
                 const feeAsset = feeAmount && parseFloat(feeAmount) > 0 ? 'APE' : '';
                 
+                // If this transaction was already processed as Trade, skip adding it again as Payment/Fee
+                if (processedAsTrade.has(tx.hash)) {
+                    return; // Skip - already added as Trade with fee information
+                }
+                
+                // If this is labeled as Payment but has 0 outgoing amount and has a fee, relabel as Fee
+                // and move the fee to outgoing columns (since fees are always outgoing)
+                if (label === 'Payment' && 
+                    outgoingAmount === '0' && 
+                    feeAsset && 
+                    parseFloat(feeAmount) > 0) {
+                    label = 'Fee';
+                    outgoingAsset = feeAsset;
+                    outgoingAmount = feeAmount;
+                    console.log(`🔍 Relabeled transaction as Fee - moved fee of ${feeAmount} ${feeAsset} to outgoing`, {
+                        hash: tx.hash,
+                        feeAmount: feeAmount
+                    });
+                }
+                
                 transactions.push({
                     hash: tx.hash,
                     date: date,
@@ -3139,8 +3207,8 @@ function WalletAnalyzer({ account, connectedAccount, onDisconnect, onClearAnalys
                     outgoingAmount: outgoingAmount,
                     incomingAsset: incomingAsset,
                     incomingAmount: incomingAmount,
-                    feeAsset: feeAsset,
-                    feeAmount: feeAmount,
+                    feeAsset: label === 'Fee' ? '' : feeAsset,  // Clear fee columns for Fee transactions
+                    feeAmount: label === 'Fee' ? '' : feeAmount,
                     comment: '',
                     type: 'transaction'
                 });
@@ -3423,7 +3491,7 @@ function WalletAnalyzer({ account, connectedAccount, onDisconnect, onClearAnalys
                     }
                     
                     // This is an outgoing NFT - check if it's a sale or transfer
-                    let label = 'NFT Sale';
+                    let label = 'Trade';
                     const outgoingAsset = 'NFT';  // Standardized to NFT
                     const outgoingAmount = '1';
                     let incomingAsset = 'APE';  // Default currency
@@ -3496,14 +3564,14 @@ function WalletAnalyzer({ account, connectedAccount, onDisconnect, onClearAnalys
                     // **ENHANCED LOGIC**: Check if this is a transfer (no payment received)
                     if (paymentAmount === null || paymentAmount === 0) {
                         // This is a transfer, not a sale
-                        label = 'Transfer';
+                        label = 'Gift Sent';
                         incomingAsset = '';
                         incomingAmount = '';
                         comment = `Token ID: ${nft.tokenID} - Collection: ${nft.tokenName} - NFT Transfer (Out) - Transfer to another wallet, no payment received`;
                         isTransfer = true;
                     } else {
                         // This is a real sale with payment (including WAPE marketplace sales)
-                        label = 'NFT Sale';
+                        label = 'Trade';
                         if (paymentCurrency) {
                             incomingAsset = paymentCurrency;
                         }
@@ -3515,6 +3583,46 @@ function WalletAnalyzer({ account, connectedAccount, onDisconnect, onClearAnalys
                         }
                     }
                     
+                    // **SPECIAL CASE**: Check if this is a Multi Ball, Price Ticket, or Trench Pickles NFT being sent out
+                    // These should be labeled as "Lost" instead of "Gift Sent" - but NOT if there's a payment (real sale/trade)
+                    const collectionName = (nft.tokenName || '').toLowerCase();
+                    if ((collectionName.includes('multi ball') || collectionName.includes('price ticket') || collectionName.includes('trench pickles')) 
+                        && (paymentAmount === null || paymentAmount === 0)) {
+                        label = 'Lost';
+                        console.log(`🎰 Detected ${nft.tokenName} NFT sent out - relabeling as Lost`, {
+                            hash: txHash,
+                            tokenId: nft.tokenID,
+                            collection: nft.tokenName
+                        });
+                    }
+                    
+                    // **SPECIAL CASE**: Check if NFT is being sent to the burn address
+                    // 0x000000000000000000000000000000000000dEaD - but NOT if there's a payment (real sale/trade)
+                    const BURN_ADDRESS = '0x000000000000000000000000000000000000dead';
+                    if (nft.to && nft.to.toLowerCase() === BURN_ADDRESS && (paymentAmount === null || paymentAmount === 0)) {
+                        label = 'Lost';
+                        console.log(`🔥 Detected NFT sent to burn address - relabeling as Lost`, {
+                            hash: txHash,
+                            tokenId: nft.tokenID,
+                            collection: nft.tokenName,
+                            to: nft.to
+                        });
+                    }
+                    
+                    // Calculate fee for this NFT transaction
+                    const tx = txsById[txHash];
+                    let feeAsset = '';
+                    let feeAmount = '';
+                    if (tx) {
+                        const gasPrice = tx.gasPrice || tx.gasPriceBid || '0';
+                        try {
+                            feeAmount = (parseInt(tx.gasUsed) * parseInt(gasPrice) / 1e18).toString();
+                        } catch (e) {
+                            feeAmount = '';
+                        }
+                        feeAsset = feeAmount && parseFloat(feeAmount) > 0 ? 'APE' : '';
+                    }
+                    
                     transactions.push({
                         hash: txHash,
                         date: date,
@@ -3523,8 +3631,8 @@ function WalletAnalyzer({ account, connectedAccount, onDisconnect, onClearAnalys
                         outgoingAmount: outgoingAmount,
                         incomingAsset: incomingAsset,
                         incomingAmount: incomingAmount,
-                        feeAsset: '',
-                        feeAmount: '',
+                        feeAsset: feeAsset,
+                        feeAmount: feeAmount,
                         comment: comment,
                         type: 'nft',
                         tokenId: nft.tokenID,
@@ -3675,6 +3783,20 @@ function WalletAnalyzer({ account, connectedAccount, onDisconnect, onClearAnalys
                             comment += ' (Free mint/airdrop - requires manual valuation)';
                         }
                         
+                        // Calculate fee for this NFT transaction
+                        const tx = txsById[txHash];
+                        let feeAsset = '';
+                        let feeAmount = '';
+                        if (tx) {
+                            const gasPrice = tx.gasPrice || tx.gasPriceBid || '0';
+                            try {
+                                feeAmount = (parseInt(tx.gasUsed) * parseInt(gasPrice) / 1e18).toString();
+                            } catch (e) {
+                                feeAmount = '';
+                            }
+                            feeAsset = feeAmount && parseFloat(feeAmount) > 0 ? 'APE' : '';
+                        }
+                        
                         transactions.push({
                             hash: txHash,
                             date: date,
@@ -3683,8 +3805,8 @@ function WalletAnalyzer({ account, connectedAccount, onDisconnect, onClearAnalys
                             outgoingAmount: outgoingAmount,
                             incomingAsset: incomingAsset,
                             incomingAmount: incomingAmount,
-                            feeAsset: '',
-                            feeAmount: '',
+                            feeAsset: feeAsset,
+                            feeAmount: feeAmount,
                             comment: comment,
                             type: 'nft',
                             tokenId: nft.tokenID,
@@ -3801,11 +3923,21 @@ function WalletAnalyzer({ account, connectedAccount, onDisconnect, onClearAnalys
 
                     // **NEW LOGIC**: Check if this is a transfer (no payment made)
                     if (purchasePrice === null || purchasePrice === 0) {
-                        // This is a transfer, not a purchase - label as Bounty for incoming NFTs
-                        label = 'Bounty';
+                        // Check if this is coming from zero address or the gift contract
+                        const GIFT_CONTRACT = '0x80d7E042b059702153246D52DBd38bA1A5419847';
+                        if (nft.from && nft.from.toLowerCase() === ZERO_ADDRESS.toLowerCase()) {
+                            label = 'Gift Received';
+                            comment = `Token ID: ${nft.tokenID} - Collection: ${nft.tokenName} - Gift/Mint from zero address`;
+                        } else if (nft.from && nft.from.toLowerCase() === GIFT_CONTRACT.toLowerCase()) {
+                            label = 'Gift Received';
+                            comment = `Token ID: ${nft.tokenID} - Collection: ${nft.tokenName} - Gift from contract`;
+                        } else {
+                            // This is a transfer from another wallet, not a purchase - label as Bounty for incoming NFTs
+                            label = 'Bounty';
+                            comment = `Token ID: ${nft.tokenID} - Collection: ${nft.tokenName} - NFT Transfer (In) - Transfer from another wallet, no payment made`;
+                        }
                         outgoingAsset = '';
                         outgoingAmount = '';
-                        comment = `Token ID: ${nft.tokenID} - Collection: ${nft.tokenName} - NFT Transfer (In) - Transfer from another wallet, no payment made`;
                         isTransfer = true;
                     } else {
                         // This is a real purchase with payment
@@ -3843,6 +3975,20 @@ function WalletAnalyzer({ account, connectedAccount, onDisconnect, onClearAnalys
                         label = 'Trade';
                     }
                     
+                    // Calculate fee for this NFT transaction
+                    const tx = txsById[txHash];
+                    let feeAsset = '';
+                    let feeAmount = '';
+                    if (tx) {
+                        const gasPrice = tx.gasPrice || tx.gasPriceBid || '0';
+                        try {
+                            feeAmount = (parseInt(tx.gasUsed) * parseInt(gasPrice) / 1e18).toString();
+                        } catch (e) {
+                            feeAmount = '';
+                        }
+                        feeAsset = feeAmount && parseFloat(feeAmount) > 0 ? 'APE' : '';
+                    }
+                    
                     transactions.push({
                         hash: txHash,
                         date: date,
@@ -3851,8 +3997,8 @@ function WalletAnalyzer({ account, connectedAccount, onDisconnect, onClearAnalys
                         outgoingAmount: outgoingAmount,
                         incomingAsset: incomingAsset,
                         incomingAmount: incomingAmount,
-                        feeAsset: '',
-                        feeAmount: '',
+                        feeAsset: feeAsset,
+                        feeAmount: feeAmount,
                         comment: comment,
                         type: 'nft',
                         tokenId: nft.tokenID,
@@ -3864,7 +4010,7 @@ function WalletAnalyzer({ account, connectedAccount, onDisconnect, onClearAnalys
             });
         }
 
-        // Process burn transactions (create NFT Conversion entries like Python script)
+        // Process burn transactions (create Trade entries like Python script)
         Object.keys(burnTransactions).forEach(txHash => {
             const burnData = burnTransactions[txHash];
             if (burnData.burned.length > 0 && burnData.minted.length > 0) {
@@ -3876,7 +4022,7 @@ function WalletAnalyzer({ account, connectedAccount, onDisconnect, onClearAnalys
                 const burnedNfts = burnData.burned.map(n => `${n.tokenName} ID:${n.tokenID}`).join(', ');
                 const mintedNfts = burnData.minted.map(n => `${n.tokenName} ID:${n.tokenID}`).join(', ');
                 
-                const label = 'NFT Conversion';
+                const label = 'Trade';
                 const outgoingAsset = burnedNfts;
                 const outgoingAmount = burnData.burned.length.toString();
                 const incomingAsset = mintedNfts;
@@ -4001,7 +4147,7 @@ function WalletAnalyzer({ account, connectedAccount, onDisconnect, onClearAnalys
 
         // Second pass: calculate profit/loss on sales (but NOT transfers)
         transactions.forEach((tx, index) => {
-            if (tx.label === 'NFT Sale' && tx.tokenId && !tx.isTransfer) {
+            if (tx.label === 'Trade' && tx.tokenId && !tx.isTransfer) {
                 // Extract token ID from comment
                 let tokenId = tx.tokenId;
                 if (tx.comment && tx.comment.includes('Token ID:')) {
@@ -4017,7 +4163,7 @@ function WalletAnalyzer({ account, connectedAccount, onDisconnect, onClearAnalys
                 const saleAmount = parseFloat(tx.incomingAmount) || 0;
                 const saleCurrency = tx.incomingAsset;
                 
-                console.log(`Processing NFT Sale: ${key}, looking for purchase record...`);
+                console.log(`Processing NFT Trade: ${key}, looking for purchase record...`);
                 
                 // Check if we have a purchase record
                 const purchase = nftPurchases[key];
@@ -4064,9 +4210,9 @@ function WalletAnalyzer({ account, connectedAccount, onDisconnect, onClearAnalys
                 }
             }
             
-            // **NEW**: Handle transfer out - no profit/loss impact
-            if (tx.label === 'Transfer' && tx.isTransfer && tx.comment && tx.comment.includes('NFT Transfer (Out)')) {
-                tx.comment += ' (Transfer - no profit/loss impact)';
+            // **NEW**: Handle gift sent out - no profit/loss impact
+            if (tx.label === 'Gift Sent' && tx.isTransfer && tx.comment && tx.comment.includes('NFT Transfer (Out)')) {
+                tx.comment += ' (Gift Sent - no profit/loss impact)';
             }
             
             // **NEW**: Handle bounty in - no cost basis
@@ -4129,10 +4275,15 @@ function WalletAnalyzer({ account, connectedAccount, onDisconnect, onClearAnalys
     };
 
     const exportToJSON = () => {
+        // Filter out Payment (Failed) and APE Staked transactions
+        const filteredTransactions = transactions.filter(tx => 
+            tx.label !== 'Payment (Failed)' && tx.label !== 'APE Staked'
+        );
+        
         const exportData = {
             account,
             analysis,
-            transactions: transactions.map(tx => ({
+            transactions: filteredTransactions.map(tx => ({
                 ...tx,
                 date: tx.date.toISOString()
             })),
@@ -4152,13 +4303,18 @@ function WalletAnalyzer({ account, connectedAccount, onDisconnect, onClearAnalys
     };
 
     const exportToCSV = () => {
+        // Filter out Payment (Failed) and APE Staked transactions
+        const filteredTransactions = transactions.filter(tx => 
+            tx.label !== 'Payment (Failed)' && tx.label !== 'APE Staked'
+        );
+        
         const headers = [
             'Date (UTC)', 'Integration Name', 'Label', 'Outgoing Asset', 'Outgoing Amount',
             'Incoming Asset', 'Incoming Amount', 'Fee Asset (optional)', 'Fee Amount (optional)',
             'Comment (optional)', 'Trx. ID (optional)'
         ];
         
-        const csvData = transactions.map(tx => [
+        const csvData = filteredTransactions.map(tx => [
             tx.date.toISOString(),
             'APECHAIN',
             tx.label,
