@@ -328,10 +328,18 @@ const fetchCollectionFloorPricesBatch = async (collections, network = 'apechain'
             // Process the bids data
             if (data.data && Array.isArray(data.data)) {
                 // Group bids by collection contract address
+                // IMPORTANT: Only include collection-wide bids (criteria.type === "COLLECTION")
+                // Exclude individual NFT bids (criteria.type === "ASSET")
                 const bidsByCollection = {};
                 
                 data.data.forEach(item => {
                     if (item.bid && item.bid.contract) {
+                        // Filter out individual NFT bids - we only want collection-wide bids
+                        if (item.bid.criteria && item.bid.criteria.type === 'ASSET') {
+                            // Skip individual NFT bids
+                            return;
+                        }
+                        
                         const contract = item.bid.contract.toLowerCase();
                         if (!bidsByCollection[contract]) {
                             bidsByCollection[contract] = [];
@@ -340,7 +348,7 @@ const fetchCollectionFloorPricesBatch = async (collections, network = 'apechain'
                     }
                 });
                 
-                console.log(`📊 Found bids for ${Object.keys(bidsByCollection).length} collections out of ${batch.length} requested`);
+                console.log(`📊 Found collection-wide bids for ${Object.keys(bidsByCollection).length} collections out of ${batch.length} requested`);
                 console.log(`📋 Collections with bids:`, Object.keys(bidsByCollection).map(c => c.substring(0, 10) + '...').join(', '));
                 
                 // Fetch current crypto prices for USD conversion
@@ -352,27 +360,25 @@ const fetchCollectionFloorPricesBatch = async (collections, network = 'apechain'
                     const bids = bidsByCollection[contractLower];
                     
                     if (bids && bids.length > 0) {
-                        // Sort bids by price descending (highest first)
-                        // Use price.currency.fiatConversion.usd * price amount for sorting
+                        // Sort bids by USD value descending (highest first)
+                        // Use priceV2.amount.fiat.usd for reliable sorting
                         const sortedBids = bids.sort((a, b) => {
-                            const priceA = a.price?.withRequiredFeesRaw ? parseFloat(a.price.withRequiredFeesRaw) / Math.pow(10, a.price.currency?.decimals || 18) : 0;
-                            const priceB = b.price?.withRequiredFeesRaw ? parseFloat(b.price.withRequiredFeesRaw) / Math.pow(10, b.price.currency?.decimals || 18) : 0;
-                            return priceB - priceA;
+                            const usdA = a.priceV2?.amount?.fiat?.usd ? parseFloat(a.priceV2.amount.fiat.usd) : 0;
+                            const usdB = b.priceV2?.amount?.fiat?.usd ? parseFloat(b.priceV2.amount.fiat.usd) : 0;
+                            return usdB - usdA;
                         });
                         
                         const topBid = sortedBids[0];
                         
-                        if (topBid.price && topBid.price.withRequiredFeesRaw && topBid.price.currency) {
-                            // Convert raw price to decimal using token decimals
-                            const decimals = topBid.price.currency.decimals || 18;
-                            const floorPrice = parseFloat(topBid.price.withRequiredFeesRaw) / Math.pow(10, decimals);
-                            const currency = topBid.price.currency.symbol || 'APE';
+                        if (topBid.priceV2 && topBid.priceV2.amount && topBid.priceV2.amount.fiat && topBid.priceV2.amount.fiat.usd) {
+                            const floorPriceUSD = parseFloat(topBid.priceV2.amount.fiat.usd);
+                            const currency = topBid.priceV2.currency?.symbol || (network === 'ethereum' ? 'WETH' : 'wAPE');
                             
-                            // Calculate USD value using live exchange rate
+                            // Convert USD back to crypto using live exchange rate
                             const exchangeRate = cryptoPrices[currency] || cryptoPrices[currency?.toUpperCase()];
-                            const floorPriceUSD = exchangeRate ? floorPrice * exchangeRate : null;
+                            const floorPrice = exchangeRate ? floorPriceUSD / exchangeRate : parseFloat(topBid.priceV2.amount.native || 0);
                             
-                            console.log(`💰 ${collection.collection_name}: Top bid = ${floorPrice.toFixed(4)} ${currency} ($${floorPriceUSD?.toFixed(2) || 'N/A'})`);
+                            console.log(`💰 ${collection.collection_name}: Top bid = $${floorPriceUSD.toFixed(2)} → ${floorPrice.toFixed(4)} ${currency} (@ $${exchangeRate?.toFixed(4)}/each)`);
                             
                             allResults.push({
                                 contractAddress: contractLower,
@@ -387,10 +393,10 @@ const fetchCollectionFloorPricesBatch = async (collections, network = 'apechain'
                                 isActive: true
                             });
                         } else {
-                            console.warn(`⚠️ ${collection.collection_name}: Bid found but no valid price data`);
+                            console.warn(`⚠️ ${collection.collection_name}: Bid found but no valid USD price data`);
                         }
                     } else {
-                        console.warn(`⚠️ ${collection.collection_name}: No bids found`);
+                        console.warn(`⚠️ ${collection.collection_name}: No collection-wide bids found (only individual NFT bids)`);
                     }
                 });
             }
@@ -455,20 +461,30 @@ const fetchCollectionFloorPrice = async (contractAddress, network = 'ethereum', 
         
         // Process v4 bids API response
         if (data.data && Array.isArray(data.data) && data.data.length > 0) {
-            const topBid = data.data[0].bid;
+            // Filter for collection-wide bids only (exclude individual NFT bids)
+            const collectionBids = data.data.filter(item => 
+                item.bid && 
+                item.bid.criteria && 
+                item.bid.criteria.type !== 'ASSET' // Exclude individual NFT bids
+            );
             
-            if (topBid && topBid.price && topBid.price.withRequiredFeesRaw && topBid.price.currency) {
-                // Convert raw price to decimal using token decimals
-                const decimals = topBid.price.currency.decimals || 18;
-                const floorPrice = parseFloat(topBid.price.withRequiredFeesRaw) / Math.pow(10, decimals);
-                const currency = topBid.price.currency.symbol || 'APE';
+            if (collectionBids.length === 0) {
+                console.warn(`❌ ${collectionName}: Only individual NFT bids found, no collection-wide bids`);
+                return null;
+            }
+            
+            const topBid = collectionBids[0].bid;
+            
+            if (topBid && topBid.priceV2 && topBid.priceV2.amount && topBid.priceV2.amount.fiat && topBid.priceV2.amount.fiat.usd) {
+                const floorPriceUSD = parseFloat(topBid.priceV2.amount.fiat.usd);
+                const currency = topBid.priceV2.currency?.symbol || (network === 'ethereum' ? 'WETH' : 'wAPE');
                 
-                // Calculate USD value using live exchange rate
+                // Calculate crypto amount using live exchange rate (USD → Crypto)
                 const cryptoPrices = await getCryptoPrices();
                 const exchangeRate = cryptoPrices[currency] || cryptoPrices[currency?.toUpperCase()];
-                const floorPriceUSD = exchangeRate ? floorPrice * exchangeRate : null;
+                const floorPrice = exchangeRate ? floorPriceUSD / exchangeRate : parseFloat(topBid.priceV2.amount.native || 0);
                 
-                console.log(`✅ ${collectionName}: Top bid = ${floorPrice.toFixed(4)} ${currency} ($${floorPriceUSD?.toFixed(2) || 'N/A'})`);
+                console.log(`✅ ${collectionName}: Top bid = $${floorPriceUSD.toFixed(2)} → ${floorPrice.toFixed(4)} ${currency} (@ $${exchangeRate?.toFixed(4)}/each)`);
                 
                 return {
                     contractAddress: contractAddress.toLowerCase(),
@@ -483,7 +499,7 @@ const fetchCollectionFloorPrice = async (contractAddress, network = 'ethereum', 
                     isActive: true
                 };
             } else {
-                console.warn(`❌ ${collectionName}: Found in Magic Eden but no valid bid data`);
+                console.warn(`❌ ${collectionName}: Found collection bid but no valid USD price data`);
                 return null;
             }
         } else {
