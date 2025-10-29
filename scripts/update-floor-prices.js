@@ -276,10 +276,12 @@ const fetchCollectionFloorPricesBatch = async (collections, network = 'apechain'
         // Build URL with collection IDs as query parameters
         // IMPORTANT: Request enough results to get at least one bid per collection
         // API returns bids sorted by price globally, not one per collection
-        // So we need limit >= number of collections to ensure coverage
+        // API only allows specific limit values: 1, 5, 10, 20, 50, 100
         const baseUrl = 'https://api-mainnet.magiceden.dev/v4/bids';
         const queryParams = collectionIds.map(id => `collectionIds[]=${encodeURIComponent(id)}`).join('&');
-        const limit = Math.max(batch.length, 40); // At least as many results as collections, max 40
+        
+        // Use 100 limit for batches (maximum allowed, covers all 40 collections)
+        const limit = 100;
         const url = `${baseUrl}?${queryParams}&sortBy=price&sortDir=desc&limit=${limit}`;
         
         console.log(`📡 API URL: ${url.substring(0, 150)}...`);
