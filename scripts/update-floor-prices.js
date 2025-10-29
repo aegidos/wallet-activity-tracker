@@ -552,7 +552,7 @@ async function main() {
         
         // Test API connectivity before processing all collections
         console.log('\n🧪 Testing Magic Eden API connectivity...');
-        const testContract = '0x22ac73fbb7d24bd40bc626f7c74690a47fc6fbee'; // Rejects contract as test
+        const testContract = '0x88f1a6d167531adc34ab24c6b22a9e99bbd77e3f'; // Rejects contract as test
         const testResult = await fetchCollectionFloorPrice(testContract, 'apechain', 'TEST Collection');
         
         if (testResult === null) {
