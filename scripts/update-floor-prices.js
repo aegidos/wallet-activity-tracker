@@ -274,12 +274,16 @@ const fetchCollectionFloorPricesBatch = async (collections, network = 'apechain'
         const collectionIds = batch.map(c => `${network}:${c.contract_address.toLowerCase()}`);
         
         // Build URL with collection IDs as query parameters
+        // IMPORTANT: Request enough results to get at least one bid per collection
+        // API returns bids sorted by price globally, not one per collection
+        // So we need limit >= number of collections to ensure coverage
         const baseUrl = 'https://api-mainnet.magiceden.dev/v4/bids';
         const queryParams = collectionIds.map(id => `collectionIds[]=${encodeURIComponent(id)}`).join('&');
-        const url = `${baseUrl}?${queryParams}&sortBy=price&sortDir=desc&limit=1`;
+        const limit = Math.max(batch.length, 40); // At least as many results as collections, max 40
+        const url = `${baseUrl}?${queryParams}&sortBy=price&sortDir=desc&limit=${limit}`;
         
         console.log(`📡 API URL: ${url.substring(0, 150)}...`);
-        console.log(`📊 Fetching top bids for ${collectionIds.length} collections`);
+        console.log(`📊 Fetching top ${limit} bids across ${collectionIds.length} collections`);
         
         try {
             const response = await fetch(url, {
@@ -321,7 +325,7 @@ const fetchCollectionFloorPricesBatch = async (collections, network = 'apechain'
             
             // Process the bids data
             if (data.data && Array.isArray(data.data)) {
-                // Group bids by collection
+                // Group bids by collection contract address
                 const bidsByCollection = {};
                 
                 data.data.forEach(item => {
@@ -334,23 +338,31 @@ const fetchCollectionFloorPricesBatch = async (collections, network = 'apechain'
                     }
                 });
                 
-                console.log(`📊 Found bids for ${Object.keys(bidsByCollection).length} collections`);
+                console.log(`📊 Found bids for ${Object.keys(bidsByCollection).length} collections out of ${batch.length} requested`);
+                console.log(`📋 Collections with bids:`, Object.keys(bidsByCollection).map(c => c.substring(0, 10) + '...').join(', '));
                 
-                // Match bids back to our collections and extract floor ask data
+                // Match bids back to our collections and extract highest bid data
                 batch.forEach(collection => {
                     const contractLower = collection.contract_address.toLowerCase();
                     const bids = bidsByCollection[contractLower];
                     
                     if (bids && bids.length > 0) {
-                        // Get the highest bid as reference
-                        const topBid = bids[0];
+                        // Sort bids by price descending (highest first)
+                        // Use priceV2.amount.native for sorting
+                        const sortedBids = bids.sort((a, b) => {
+                            const priceA = parseFloat(a.priceV2?.amount?.native || 0);
+                            const priceB = parseFloat(b.priceV2?.amount?.native || 0);
+                            return priceB - priceA;
+                        });
                         
-                        if (topBid.price && topBid.price.netAmount) {
-                            const floorPrice = parseFloat(topBid.price.netAmount.decimal);
-                            const floorPriceUSD = topBid.price.netAmount.usd || null;
-                            const currency = topBid.price.netAmount.symbol || 'APE';
+                        const topBid = sortedBids[0];
+                        
+                        if (topBid.priceV2 && topBid.priceV2.amount) {
+                            const floorPrice = parseFloat(topBid.priceV2.amount.native);
+                            const floorPriceUSD = topBid.priceV2.amount.fiat?.usd ? parseFloat(topBid.priceV2.amount.fiat.usd) : null;
+                            const currency = topBid.priceV2.currency?.symbol || 'APE';
                             
-                            console.log(`💰 ${collection.collection_name}: Top bid = ${floorPrice} ${currency}`);
+                            console.log(`💰 ${collection.collection_name}: Top bid = ${floorPrice} ${currency} ($${floorPriceUSD?.toFixed(2) || 'N/A'})`);
                             
                             allResults.push({
                                 contractAddress: contractLower,
@@ -364,6 +376,8 @@ const fetchCollectionFloorPricesBatch = async (collections, network = 'apechain'
                                 suspicious: false,
                                 isActive: true
                             });
+                        } else {
+                            console.warn(`⚠️ ${collection.collection_name}: Bid found but no valid price data`);
                         }
                     } else {
                         console.warn(`⚠️ ${collection.collection_name}: No bids found`);
@@ -433,12 +447,12 @@ const fetchCollectionFloorPrice = async (contractAddress, network = 'ethereum', 
         if (data.data && Array.isArray(data.data) && data.data.length > 0) {
             const topBid = data.data[0].bid;
             
-            if (topBid && topBid.price && topBid.price.netAmount) {
-                const floorPrice = parseFloat(topBid.price.netAmount.decimal);
-                const floorPriceUSD = topBid.price.netAmount.usd || null;
-                const currency = topBid.price.netAmount.symbol || 'APE';
+            if (topBid && topBid.priceV2 && topBid.priceV2.amount) {
+                const floorPrice = parseFloat(topBid.priceV2.amount.native);
+                const floorPriceUSD = topBid.priceV2.amount.fiat?.usd ? parseFloat(topBid.priceV2.amount.fiat.usd) : null;
+                const currency = topBid.priceV2.currency?.symbol || 'APE';
                 
-                console.log(`✅ ${collectionName}: Top bid = ${floorPrice} ${currency} ($${floorPriceUSD?.toLocaleString() || 'N/A'})`);
+                console.log(`✅ ${collectionName}: Top bid = ${floorPrice} ${currency} ($${floorPriceUSD?.toFixed(2) || 'N/A'})`);
                 
                 return {
                     contractAddress: contractAddress.toLowerCase(),
