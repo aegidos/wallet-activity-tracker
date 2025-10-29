@@ -260,13 +260,34 @@ const fetchCollectionFloorPrice = async (contractAddress, network = 'ethereum', 
     const url = `${apiEndpoint}?id=${contractAddress}&limit=20`;
     
     console.log(`🔍 Fetching floor price for ${collectionName} on ${network} (${contractAddress.substring(0, 8)}...)`);
+    console.log(`📡 API URL: ${url}`);
     
     try {
         const response = await fetch(url);
-        const data = await response.json();
+        
+        // Log response details before parsing
+        console.log(`📊 Response status: ${response.status} ${response.statusText}`);
+        console.log(`📋 Content-Type: ${response.headers.get('content-type')}`);
+        
+        // Get raw text first to see what we're dealing with
+        const rawText = await response.text();
+        console.log(`📄 Raw response (first 200 chars): ${rawText.substring(0, 200)}`);
         
         if (!response.ok) {
-            throw new Error(`API responded with status ${response.status}: ${data.message || 'Unknown error'}`);
+            console.error(`❌ API responded with status ${response.status}`);
+            console.error(`📄 Response body: ${rawText}`);
+            return null;
+        }
+        
+        // Try to parse JSON
+        let data;
+        try {
+            data = JSON.parse(rawText);
+        } catch (parseError) {
+            console.error(`❌ Failed to parse JSON response`);
+            console.error(`📄 Raw text: ${rawText}`);
+            console.error(`❌ Parse error: ${parseError.message}`);
+            return null;
         }
         
         if (data.collections && data.collections.length > 0) {
@@ -528,6 +549,29 @@ async function main() {
         console.log('\n🚀 Starting Floor Price Update Script');
         console.log(`⏰ Execution time: ${new Date().toISOString()}`);
         console.log(`🌐 Environment: ${process.env.NODE_ENV || 'development'}`);
+        
+        // Test API connectivity before processing all collections
+        console.log('\n🧪 Testing Magic Eden API connectivity...');
+        const testContract = '0x22ac73fbb7d24bd40bc626f7c74690a47fc6fbee'; // Rejects contract as test
+        const testResult = await fetchCollectionFloorPrice(testContract, 'apechain', 'TEST Collection');
+        
+        if (testResult === null) {
+            console.error('\n❌ API connectivity test FAILED');
+            console.error('💡 Possible issues:');
+            console.error('   1. Magic Eden API endpoint has changed');
+            console.error('   2. API requires authentication/API key');
+            console.error('   3. Rate limiting or IP blocking');
+            console.error('   4. Network connectivity issues');
+            console.error('\n💡 Suggested actions:');
+            console.error('   1. Check Magic Eden API documentation for updates');
+            console.error('   2. Verify API endpoints are still valid');
+            console.error('   3. Check if API key is required');
+            console.log('\n⚠️ Stopping execution to prevent wasting API calls');
+            process.exit(1);
+        }
+        
+        console.log('✅ API connectivity test PASSED');
+        console.log(`📊 Test result: ${testResult.collectionName || 'Unknown'} - ${testResult.floorPrice || 0} ${testResult.currency || 'N/A'}`);
         
         // Step 1: Get all collections from database
         const collections = await getAllNftCollections();
