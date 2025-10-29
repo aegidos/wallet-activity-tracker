@@ -331,21 +331,37 @@ const fetchCollectionFloorPricesBatch = async (collections, network = 'apechain'
                 // Group bids by collection contract address
                 // IMPORTANT: Only include collection-wide bids (criteria.type === "COLLECTION")
                 // Exclude individual NFT bids (criteria.type === "ASSET")
+                // Also exclude attribute-specific bids (criteria.type === "ATTRIBUTE")
                 const bidsByCollection = {};
                 
-                data.data.forEach(item => {
+                console.log(`🔍 Processing ${data.data.length} bids from API response...`);
+                
+                data.data.forEach((item, index) => {
                     if (item.bid && item.bid.contract) {
-                        // Filter out individual NFT bids - we only want collection-wide bids
-                        if (item.bid.criteria && item.bid.criteria.type === 'ASSET') {
-                            // Skip individual NFT bids
+                        const criteriaType = item.bid.criteria?.type;
+                        
+                        // Filter out individual NFT bids and attribute-specific bids
+                        if (criteriaType === 'ASSET') {
+                            console.log(`⏭️  Bid ${index + 1}: Skipping ASSET bid (individual NFT)`);
                             return;
                         }
                         
-                        const contract = item.bid.contract.toLowerCase();
-                        if (!bidsByCollection[contract]) {
-                            bidsByCollection[contract] = [];
+                        if (criteriaType === 'ATTRIBUTE') {
+                            console.log(`⏭️  Bid ${index + 1}: Skipping ATTRIBUTE bid (trait-specific)`);
+                            return;
                         }
-                        bidsByCollection[contract].push(item.bid);
+                        
+                        // Accept COLLECTION bids and bids without criteria type
+                        if (criteriaType === 'COLLECTION' || !criteriaType) {
+                            console.log(`✅ Bid ${index + 1}: Accepting ${criteriaType || 'NO_CRITERIA'} bid`);
+                            const contract = item.bid.contract.toLowerCase();
+                            if (!bidsByCollection[contract]) {
+                                bidsByCollection[contract] = [];
+                            }
+                            bidsByCollection[contract].push(item.bid);
+                        } else {
+                            console.log(`⚠️  Bid ${index + 1}: Unknown criteria type: ${criteriaType}`);
+                        }
                     }
                 });
                 
