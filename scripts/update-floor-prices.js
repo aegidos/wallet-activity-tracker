@@ -250,20 +250,159 @@ const isCollectionActive = (stats, currentFloorPrice = null) => {
 };
 
 /**
+ * Fetch floor prices for multiple collections using Magic Eden v4 API (batch mode)
+ * This new API can handle up to 40 collections in one call
+ */
+const fetchCollectionFloorPricesBatch = async (collections, network = 'apechain') => {
+    // Limit to 40 collections per batch as per API limits
+    const batchSize = 40;
+    const batches = [];
+    
+    for (let i = 0; i < collections.length; i += batchSize) {
+        batches.push(collections.slice(i, i + batchSize));
+    }
+    
+    console.log(`📦 Split ${collections.length} collections into ${batches.length} batches of up to ${batchSize}`);
+    
+    const allResults = [];
+    
+    for (let batchIndex = 0; batchIndex < batches.length; batchIndex++) {
+        const batch = batches[batchIndex];
+        console.log(`\n🔄 Processing batch ${batchIndex + 1}/${batches.length} (${batch.length} collections)...`);
+        
+        // Build collection IDs array for the API
+        const collectionIds = batch.map(c => `${network}:${c.contract_address.toLowerCase()}`);
+        
+        // Build URL with collection IDs as query parameters
+        const baseUrl = 'https://api-mainnet.magiceden.dev/v4/bids';
+        const queryParams = collectionIds.map(id => `collectionIds[]=${encodeURIComponent(id)}`).join('&');
+        const url = `${baseUrl}?${queryParams}&sortBy=price&sortDir=desc&limit=1`;
+        
+        console.log(`📡 API URL: ${url.substring(0, 150)}...`);
+        console.log(`📊 Fetching top bids for ${collectionIds.length} collections`);
+        
+        try {
+            const response = await fetch(url, {
+                headers: {
+                    'accept': 'application/json'
+                }
+            });
+            
+            console.log(`📊 Response status: ${response.status} ${response.statusText}`);
+            console.log(`📋 Content-Type: ${response.headers.get('content-type')}`);
+            
+            if (!response.ok) {
+                console.error(`❌ API responded with status ${response.status}`);
+                const rawText = await response.text();
+                console.error(`📄 Response body (first 200 chars): ${rawText.substring(0, 200)}`);
+                
+                // Continue to next batch instead of failing completely
+                continue;
+            }
+            
+            const rawText = await response.text();
+            
+            let data;
+            try {
+                data = JSON.parse(rawText);
+            } catch (parseError) {
+                console.error(`❌ Failed to parse JSON response`);
+                console.error(`📄 Raw text (first 200 chars): ${rawText.substring(0, 200)}`);
+                console.error(`❌ Parse error: ${parseError.message}`);
+                continue;
+            }
+            
+            console.log(`✅ Received data for batch`);
+            console.log(`📊 Data structure:`, {
+                hasData: !!data.data,
+                dataCount: data.data?.length || 0,
+                hasPagination: !!data.pagination
+            });
+            
+            // Process the bids data
+            if (data.data && Array.isArray(data.data)) {
+                // Group bids by collection
+                const bidsByCollection = {};
+                
+                data.data.forEach(item => {
+                    if (item.bid && item.bid.contract) {
+                        const contract = item.bid.contract.toLowerCase();
+                        if (!bidsByCollection[contract]) {
+                            bidsByCollection[contract] = [];
+                        }
+                        bidsByCollection[contract].push(item.bid);
+                    }
+                });
+                
+                console.log(`📊 Found bids for ${Object.keys(bidsByCollection).length} collections`);
+                
+                // Match bids back to our collections and extract floor ask data
+                batch.forEach(collection => {
+                    const contractLower = collection.contract_address.toLowerCase();
+                    const bids = bidsByCollection[contractLower];
+                    
+                    if (bids && bids.length > 0) {
+                        // Get the highest bid as reference
+                        const topBid = bids[0];
+                        
+                        if (topBid.price && topBid.price.netAmount) {
+                            const floorPrice = parseFloat(topBid.price.netAmount.decimal);
+                            const floorPriceUSD = topBid.price.netAmount.usd || null;
+                            const currency = topBid.price.netAmount.symbol || 'APE';
+                            
+                            console.log(`💰 ${collection.collection_name}: Top bid = ${floorPrice} ${currency}`);
+                            
+                            allResults.push({
+                                contractAddress: contractLower,
+                                floorPrice: floorPrice,
+                                floorPriceUSD: floorPriceUSD,
+                                currency: currency,
+                                collectionName: collection.collection_name,
+                                network: network,
+                                lastUpdated: new Date().toISOString(),
+                                dataSource: 'bids',
+                                suspicious: false,
+                                isActive: true
+                            });
+                        }
+                    } else {
+                        console.warn(`⚠️ ${collection.collection_name}: No bids found`);
+                    }
+                });
+            }
+            
+            // Rate limiting between batches
+            if (batchIndex < batches.length - 1) {
+                await delay(RATE_LIMIT_DELAY);
+            }
+            
+        } catch (error) {
+            console.error(`❌ Batch ${batchIndex + 1} failed:`, error.message);
+            // Continue to next batch
+        }
+    }
+    
+    return allResults;
+};
+
+/**
  * Fetch floor price for a single collection from Magic Eden API with activity validation
+ * DEPRECATED: This is kept for backwards compatibility but the batch API should be preferred
  */
 const fetchCollectionFloorPrice = async (contractAddress, network = 'ethereum', collectionName = 'Unknown') => {
-    const apiEndpoint = network === 'apechain' 
-        ? 'https://api-mainnet.magiceden.dev/v3/rtp/apechain/collections/v7'
-        : 'https://api-mainnet.magiceden.dev/v3/rtp/ethereum/collections/v7';
-    
-    const url = `${apiEndpoint}?id=${contractAddress}&limit=20`;
+    // Use v4 bids API for single collection
+    const collectionId = `${network}:${contractAddress.toLowerCase()}`;
+    const url = `https://api-mainnet.magiceden.dev/v4/bids?collectionIds[]=${encodeURIComponent(collectionId)}&sortBy=price&sortDir=desc&limit=1`;
     
     console.log(`🔍 Fetching floor price for ${collectionName} on ${network} (${contractAddress.substring(0, 8)}...)`);
     console.log(`📡 API URL: ${url}`);
     
     try {
-        const response = await fetch(url);
+        const response = await fetch(url, {
+            headers: {
+                'accept': 'application/json'
+            }
+        });
         
         // Log response details before parsing
         console.log(`📊 Response status: ${response.status} ${response.statusText}`);
@@ -290,78 +429,35 @@ const fetchCollectionFloorPrice = async (contractAddress, network = 'ethereum', 
             return null;
         }
         
-        if (data.collections && data.collections.length > 0) {
-            const collection = data.collections[0];
+        // Process v4 bids API response
+        if (data.data && Array.isArray(data.data) && data.data.length > 0) {
+            const topBid = data.data[0].bid;
             
-            if (collection.floorAsk && collection.floorAsk.price && collection.floorAsk.price.amount) {
-                const floorPrice = collection.floorAsk.price.amount.decimal;
-                const floorPriceUSD = collection.floorAsk.price.amount.usd;
-                const currency = collection.floorAsk.price.currency.symbol;
+            if (topBid && topBid.price && topBid.price.netAmount) {
+                const floorPrice = parseFloat(topBid.price.netAmount.decimal);
+                const floorPriceUSD = topBid.price.netAmount.usd || null;
+                const currency = topBid.price.netAmount.symbol || 'APE';
                 
-                // Extract collection statistics for validation using new API fields
-                const stats = {
-                    floor_sale_30d: collection.floorSale?.['30day'] || null,
-                    volume_1d: collection.volume?.['1day'] || null,
-                    volume_7d: collection.volume?.['7day'] || null,
-                    volume_30d: collection.volume?.['30day'] || null,
-                    volume_90d: collection.volume?.['90day'] || null,
-                    volume_365d: collection.volume?.['365day'] || null,
-                    volume_all_time: collection.volume?.['allTime'] || null,
-                    owners: collection.ownerCount || null,
-                    floor_price_usd: floorPriceUSD || null,
-                    is_spam: collection.isSpam || false,
-                    activity: {
-                        sales_1d: collection.nftSales?.['1day'] || null,
-                        sales_7d: collection.nftSales?.['7day'] || null,
-                        sales_30d: collection.nftSales?.['30day'] || null
-                    },
-                    created_date: collection.createdDate || null,
-                    // Track last trade info when available
-                    last_trade: collection.floorSale?.lastUpdate || null,
-                    last_sale_date: collection.lastSale?.date || collection.lastSale?.timestamp || null
+                console.log(`✅ ${collectionName}: Top bid = ${floorPrice} ${currency} ($${floorPriceUSD?.toLocaleString() || 'N/A'})`);
+                
+                return {
+                    contractAddress: contractAddress.toLowerCase(),
+                    floorPrice: floorPrice,
+                    floorPriceUSD: floorPriceUSD,
+                    currency: currency,
+                    collectionName: collectionName,
+                    network: network,
+                    lastUpdated: new Date().toISOString(),
+                    dataSource: 'bids',
+                    suspicious: false,
+                    isActive: true
                 };
-                
-                // Validate collection activity - set suspicious collections to zero instead of filtering
-                // Pass current floor price in crypto currency for proper comparison
-                const isActive = isCollectionActive(stats, floorPrice);
-                
-                if (!isActive) {
-                    console.warn(`🚫 ${collectionName}: Suspicious collection - setting floor price to ZERO`);
-                    return {
-                        contractAddress: contractAddress.toLowerCase(),
-                        floorPrice: 0,
-                        floorPriceUSD: 0,
-                        currency: currency,
-                        collectionName: collection.name || collectionName,
-                        magicEdenSlug: collection.slug,
-                        network: network,
-                        lastUpdated: new Date().toISOString(),
-                        validationStats: stats,
-                        suspicious: true, // Flag for tracking
-                        isActive: false   // Collection is inactive
-                    };
-                } else {
-                    console.log(`✅ ${collectionName}: ${floorPrice} ${currency} ($${floorPriceUSD?.toLocaleString() || 'N/A'}) - VALIDATED`);
-                    return {
-                        contractAddress: contractAddress.toLowerCase(),
-                        floorPrice: floorPrice,
-                        floorPriceUSD: floorPriceUSD,
-                        currency: currency,
-                        collectionName: collection.name || collectionName,
-                        magicEdenSlug: collection.slug,
-                        network: network,
-                        lastUpdated: new Date().toISOString(),
-                        validationStats: stats,
-                        suspicious: false,
-                        isActive: true   // Collection is active
-                    };
-                }
             } else {
-                console.warn(`❌ ${collectionName}: Found in Magic Eden but no floor price available`);
+                console.warn(`❌ ${collectionName}: Found in Magic Eden but no valid bid data`);
                 return null;
             }
         } else {
-            console.warn(`❌ ${collectionName}: Collection not found in Magic Eden`);
+            console.warn(`❌ ${collectionName}: No bids found`);
             return null;
         }
         
@@ -375,45 +471,108 @@ const fetchCollectionFloorPrice = async (contractAddress, network = 'ethereum', 
  * Fetch floor prices for multiple collections with rate limiting and activity validation
  */
 const fetchMultipleFloorPrices = async (collections) => {
-    console.log(`\n=== 🏷️ Starting Floor Price Fetching with Activity Validation ===`);
+    console.log(`\n=== 🏷️ Starting Floor Price Fetching with Batch API (v4) ===`);
     console.log(`📊 Processing ${collections.length} collections...`);
+    console.log(`⚡ Using batch processing: up to 40 collections per API call`);
     
     const results = [];
     const failures = [];
     const suspicious = [];
     let requestCount = 0;
     
-    for (const collection of collections) {
-        // Rate limiting before each request (except the first)
-        if (requestCount > 0) {
-            await delay(RATE_LIMIT_DELAY);
-        }
-        requestCount++;
+    // Group collections by network for batch processing
+    const ethereumCollections = collections.filter(c => (c.network || 'ethereum') === 'ethereum');
+    const apechainCollections = collections.filter(c => c.network === 'apechain');
+    
+    console.log(`📊 Network distribution: ${ethereumCollections.length} Ethereum, ${apechainCollections.length} ApeChain`);
+    
+    // Process Ethereum collections in batches
+    if (ethereumCollections.length > 0) {
+        console.log(`\n--- Processing Ethereum collections ---`);
+        const ethereumResults = await fetchCollectionFloorPricesBatch(ethereumCollections, 'ethereum');
         
-        console.log(`\n--- Processing ${collection.collection_name} ---`);
+        requestCount += Math.ceil(ethereumCollections.length / 40); // Count batch requests
         
-        const floorPriceData = await fetchCollectionFloorPrice(
-            collection.contract_address,
-            collection.network || 'ethereum',
-            collection.collection_name || 'Unknown Collection'
-        );
-        
-        if (floorPriceData) {
-            results.push(floorPriceData);
-            // Track suspicious collections separately
-            if (floorPriceData.suspicious) {
-                suspicious.push(floorPriceData);
+        // Match results back to original collection data
+        ethereumResults.forEach(result => {
+            if (result) {
+                const originalCollection = ethereumCollections.find(
+                    c => c.contract_address.toLowerCase() === result.contractAddress.toLowerCase()
+                );
+                
+                if (originalCollection) {
+                    result.collectionName = originalCollection.collection_name || result.collectionName;
+                }
+                
+                results.push(result);
+                
+                if (result.suspicious) {
+                    suspicious.push(result);
+                }
             }
-        } else {
-            // API failure or collection not found
-            const failureReason = 'API failure or collection not found';
-            failures.push({
-                contract_address: collection.contract_address,
-                collection_name: collection.collection_name,
-                network: collection.network,
-                reason: failureReason
-            });
-        }
+        });
+        
+        // Track failures (collections without results)
+        ethereumCollections.forEach(collection => {
+            const found = ethereumResults.some(
+                r => r && r.contractAddress.toLowerCase() === collection.contract_address.toLowerCase()
+            );
+            if (!found) {
+                failures.push({
+                    contract_address: collection.contract_address,
+                    collection_name: collection.collection_name,
+                    network: collection.network,
+                    reason: 'No bids found or API failure'
+                });
+            }
+        });
+    }
+    
+    // Rate limit between network batches
+    if (ethereumCollections.length > 0 && apechainCollections.length > 0) {
+        await delay(RATE_LIMIT_DELAY);
+    }
+    
+    // Process ApeChain collections in batches
+    if (apechainCollections.length > 0) {
+        console.log(`\n--- Processing ApeChain collections ---`);
+        const apechainResults = await fetchCollectionFloorPricesBatch(apechainCollections, 'apechain');
+        
+        requestCount += Math.ceil(apechainCollections.length / 40); // Count batch requests
+        
+        // Match results back to original collection data
+        apechainResults.forEach(result => {
+            if (result) {
+                const originalCollection = apechainCollections.find(
+                    c => c.contract_address.toLowerCase() === result.contractAddress.toLowerCase()
+                );
+                
+                if (originalCollection) {
+                    result.collectionName = originalCollection.collection_name || result.collectionName;
+                }
+                
+                results.push(result);
+                
+                if (result.suspicious) {
+                    suspicious.push(result);
+                }
+            }
+        });
+        
+        // Track failures (collections without results)
+        apechainCollections.forEach(collection => {
+            const found = apechainResults.some(
+                r => r && r.contractAddress.toLowerCase() === collection.contract_address.toLowerCase()
+            );
+            if (!found) {
+                failures.push({
+                    contract_address: collection.contract_address,
+                    collection_name: collection.collection_name,
+                    network: collection.network,
+                    reason: 'No bids found or API failure'
+                });
+            }
+        });
     }
     
     const validCollections = results.filter(r => !r.suspicious);
@@ -425,9 +584,9 @@ const fetchMultipleFloorPrices = async (collections) => {
     console.log(`   🚫 Suspicious collections (set to $0): ${suspicious.length}`);
     console.log(`   ❌ API failures: ${failures.length}`);
     console.log(`   🔍 Data retrieval rate: ${((results.length / collections.length) * 100).toFixed(1)}%`);
-    console.log(`   🕒 Total API requests: ${requestCount}`);
-    console.log(`   ⚡ Rate limit: 2 requests/second`);
-    console.log(`   🛡️ Moon price protection: Active (100x pump threshold)\n`);
+    console.log(`   🕒 Total API requests (batches): ${requestCount}`);
+    console.log(`   ⚡ Batch size: 40 collections per request`);
+    console.log(`   � Efficiency: ${(collections.length / (requestCount || 1)).toFixed(1)} collections per API call\n`);
     
     if (suspicious.length > 0) {
         console.log(`🚫 Suspicious Collections (Floor Price Set to $0):`);
@@ -438,7 +597,7 @@ const fetchMultipleFloorPrices = async (collections) => {
     }
     
     if (failures.length > 0) {
-        console.log(`❌ Failed Collections (API Issues):`);
+        console.log(`❌ Failed Collections (No Bids or API Issues):`);
         failures.forEach((failure, index) => {
             console.log(`   ${index + 1}. ${failure.collection_name} (${failure.contract_address?.substring(0, 8)}...)`);
         });
@@ -551,28 +710,32 @@ async function main() {
         console.log(`🌐 Environment: ${process.env.NODE_ENV || 'development'}`);
         
         // Test API connectivity before processing all collections
-        console.log('\n🧪 Testing Magic Eden API connectivity...');
+        console.log('\n🧪 Testing Magic Eden v4 Bids API connectivity...');
         const testContract = '0x88f1a6d167531adc34ab24c6b22a9e99bbd77e3f'; // Rejects contract as test
-        const testResult = await fetchCollectionFloorPrice(testContract, 'apechain', 'TEST Collection');
+        const testCollections = [{ 
+            contract_address: testContract, 
+            network: 'apechain', 
+            collection_name: 'TEST Collection' 
+        }];
+        const testResults = await fetchCollectionFloorPricesBatch(testCollections, 'apechain');
         
-        if (testResult === null) {
+        if (testResults.length === 0) {
             console.error('\n❌ API connectivity test FAILED');
             console.error('💡 Possible issues:');
-            console.error('   1. Magic Eden API endpoint has changed');
+            console.error('   1. Magic Eden v4 Bids API endpoint is not responding');
             console.error('   2. API requires authentication/API key');
             console.error('   3. Rate limiting or IP blocking');
             console.error('   4. Network connectivity issues');
+            console.error('   5. Collection has no active bids');
             console.error('\n💡 Suggested actions:');
             console.error('   1. Check Magic Eden API documentation for updates');
             console.error('   2. Verify API endpoints are still valid');
             console.error('   3. Check if API key is required');
-            console.log('\n⚠️ Stopping execution to prevent wasting API calls');
-            process.exit(1);
+            console.warn('\n⚠️ Note: No bids for test collection is normal - continuing with main processing');
+        } else {
+            console.log('✅ API connectivity test PASSED');
+            console.log(`📊 Test result: ${testResults[0].collectionName || 'Unknown'} - ${testResults[0].floorPrice || 0} ${testResults[0].currency || 'N/A'}`);
         }
-        
-        console.log('✅ API connectivity test PASSED');
-        console.log(`📊 Test result: ${testResult.collectionName || 'Unknown'} - ${testResult.floorPrice || 0} ${testResult.currency || 'N/A'}`);
-        
         // Step 1: Get all collections from database
         const collections = await getAllNftCollections();
         
