@@ -343,6 +343,9 @@ const fetchCollectionFloorPricesBatch = async (collections, network = 'apechain'
                 console.log(`📊 Found bids for ${Object.keys(bidsByCollection).length} collections out of ${batch.length} requested`);
                 console.log(`📋 Collections with bids:`, Object.keys(bidsByCollection).map(c => c.substring(0, 10) + '...').join(', '));
                 
+                // Fetch current crypto prices for USD conversion
+                const cryptoPrices = await getCryptoPrices();
+                
                 // Match bids back to our collections and extract highest bid data
                 batch.forEach(collection => {
                     const contractLower = collection.contract_address.toLowerCase();
@@ -350,21 +353,26 @@ const fetchCollectionFloorPricesBatch = async (collections, network = 'apechain'
                     
                     if (bids && bids.length > 0) {
                         // Sort bids by price descending (highest first)
-                        // Use priceV2.amount.native for sorting
+                        // Use price.currency.fiatConversion.usd * price amount for sorting
                         const sortedBids = bids.sort((a, b) => {
-                            const priceA = parseFloat(a.priceV2?.amount?.native || 0);
-                            const priceB = parseFloat(b.priceV2?.amount?.native || 0);
+                            const priceA = a.price?.withRequiredFeesRaw ? parseFloat(a.price.withRequiredFeesRaw) / Math.pow(10, a.price.currency?.decimals || 18) : 0;
+                            const priceB = b.price?.withRequiredFeesRaw ? parseFloat(b.price.withRequiredFeesRaw) / Math.pow(10, b.price.currency?.decimals || 18) : 0;
                             return priceB - priceA;
                         });
                         
                         const topBid = sortedBids[0];
                         
-                        if (topBid.priceV2 && topBid.priceV2.amount) {
-                            const floorPrice = parseFloat(topBid.priceV2.amount.native);
-                            const floorPriceUSD = topBid.priceV2.amount.fiat?.usd ? parseFloat(topBid.priceV2.amount.fiat.usd) : null;
-                            const currency = topBid.priceV2.currency?.symbol || 'APE';
+                        if (topBid.price && topBid.price.withRequiredFeesRaw && topBid.price.currency) {
+                            // Convert raw price to decimal using token decimals
+                            const decimals = topBid.price.currency.decimals || 18;
+                            const floorPrice = parseFloat(topBid.price.withRequiredFeesRaw) / Math.pow(10, decimals);
+                            const currency = topBid.price.currency.symbol || 'APE';
                             
-                            console.log(`💰 ${collection.collection_name}: Top bid = ${floorPrice} ${currency} ($${floorPriceUSD?.toFixed(2) || 'N/A'})`);
+                            // Calculate USD value using live exchange rate
+                            const exchangeRate = cryptoPrices[currency] || cryptoPrices[currency?.toUpperCase()];
+                            const floorPriceUSD = exchangeRate ? floorPrice * exchangeRate : null;
+                            
+                            console.log(`💰 ${collection.collection_name}: Top bid = ${floorPrice.toFixed(4)} ${currency} ($${floorPriceUSD?.toFixed(2) || 'N/A'})`);
                             
                             allResults.push({
                                 contractAddress: contractLower,
@@ -449,12 +457,18 @@ const fetchCollectionFloorPrice = async (contractAddress, network = 'ethereum', 
         if (data.data && Array.isArray(data.data) && data.data.length > 0) {
             const topBid = data.data[0].bid;
             
-            if (topBid && topBid.priceV2 && topBid.priceV2.amount) {
-                const floorPrice = parseFloat(topBid.priceV2.amount.native);
-                const floorPriceUSD = topBid.priceV2.amount.fiat?.usd ? parseFloat(topBid.priceV2.amount.fiat.usd) : null;
-                const currency = topBid.priceV2.currency?.symbol || 'APE';
+            if (topBid && topBid.price && topBid.price.withRequiredFeesRaw && topBid.price.currency) {
+                // Convert raw price to decimal using token decimals
+                const decimals = topBid.price.currency.decimals || 18;
+                const floorPrice = parseFloat(topBid.price.withRequiredFeesRaw) / Math.pow(10, decimals);
+                const currency = topBid.price.currency.symbol || 'APE';
                 
-                console.log(`✅ ${collectionName}: Top bid = ${floorPrice} ${currency} ($${floorPriceUSD?.toFixed(2) || 'N/A'})`);
+                // Calculate USD value using live exchange rate
+                const cryptoPrices = await getCryptoPrices();
+                const exchangeRate = cryptoPrices[currency] || cryptoPrices[currency?.toUpperCase()];
+                const floorPriceUSD = exchangeRate ? floorPrice * exchangeRate : null;
+                
+                console.log(`✅ ${collectionName}: Top bid = ${floorPrice.toFixed(4)} ${currency} ($${floorPriceUSD?.toFixed(2) || 'N/A'})`);
                 
                 return {
                     contractAddress: contractAddress.toLowerCase(),
@@ -624,16 +638,39 @@ const fetchMultipleFloorPrices = async (collections) => {
 };
 
 /**
- * Get current ETH price for USD conversion
+ * Get current crypto prices for USD conversion
  */
-const getCurrentEthPrice = async () => {
+const getCryptoPrices = async () => {
     try {
-        const response = await fetch('https://api.binance.com/api/v3/ticker/price?symbol=ETHUSDT');
-        const data = await response.json();
-        return parseFloat(data.price);
+        console.log('💰 Fetching current crypto prices...');
+        
+        // Fetch ETH price
+        const ethResponse = await fetch('https://api.binance.com/api/v3/ticker/price?symbol=ETHUSDT');
+        const ethData = await ethResponse.json();
+        const ethPrice = parseFloat(ethData.price);
+        
+        // Fetch APE price
+        const apeResponse = await fetch('https://api.binance.com/api/v3/ticker/price?symbol=APEUSDT');
+        const apeData = await apeResponse.json();
+        const apePrice = parseFloat(apeData.price);
+        
+        console.log(`✅ ETH: $${ethPrice.toFixed(2)}`);
+        console.log(`✅ APE: $${apePrice.toFixed(4)}`);
+        
+        return {
+            ETH: ethPrice,
+            APE: apePrice,
+            WETH: ethPrice, // Wrapped ETH = ETH
+            wAPE: apePrice  // Wrapped APE = APE
+        };
     } catch (error) {
-        console.warn('Failed to fetch ETH price, using fallback:', error.message);
-        return 3000; // Fallback ETH price
+        console.warn('⚠️ Failed to fetch crypto prices, using fallback:', error.message);
+        return {
+            ETH: 3000,
+            APE: 0.45,
+            WETH: 3000,
+            wAPE: 0.45
+        };
     }
 };
 
@@ -641,14 +678,20 @@ const getCurrentEthPrice = async () => {
  * Convert floor prices to USD where needed
  */
 const convertPricesToUSD = async (floorPriceResults) => {
-    const ethPrice = await getCurrentEthPrice();
-    console.log(`💰 Using ETH price: $${ethPrice.toFixed(2)} for USD conversions`);
+    const cryptoPrices = await getCryptoPrices();
+    console.log(`\n💰 Converting prices to USD using current exchange rates`);
     
     return floorPriceResults.map(result => {
-        if (result.currency === 'ETH' && result.floorPrice && !result.floorPriceUSD) {
-            // Calculate USD price from ETH price
-            result.floorPriceUSD = result.floorPrice * ethPrice;
-            console.log(`🔄 Converted ${result.collectionName}: ${result.floorPrice} ETH → $${result.floorPriceUSD.toFixed(2)}`);
+        if (result.floorPrice && !result.floorPriceUSD) {
+            // Get the exchange rate for this currency
+            const exchangeRate = cryptoPrices[result.currency] || cryptoPrices[result.currency?.toUpperCase()];
+            
+            if (exchangeRate) {
+                result.floorPriceUSD = result.floorPrice * exchangeRate;
+                console.log(`🔄 ${result.collectionName}: ${result.floorPrice} ${result.currency} × $${exchangeRate.toFixed(4)} = $${result.floorPriceUSD.toFixed(2)}`);
+            } else {
+                console.warn(`⚠️ ${result.collectionName}: No exchange rate found for ${result.currency}, cannot calculate USD value`);
+            }
         }
         return result;
     });
