@@ -252,180 +252,83 @@ const isCollectionActive = (stats, currentFloorPrice = null) => {
 
 /**
  * Fetch floor prices for multiple collections using Magic Eden v4 API (batch mode)
- * This new API can handle up to 40 collections in one call
+ * Uses the collections endpoint which provides floorAsk data directly
  */
 const fetchCollectionFloorPricesBatch = async (collections, network = 'apechain') => {
-    // Limit to 40 collections per batch as per API limits
-    const batchSize = 40;
-    const batches = [];
-    
-    for (let i = 0; i < collections.length; i += batchSize) {
-        batches.push(collections.slice(i, i + batchSize));
-    }
-    
-    console.log(`📦 Split ${collections.length} collections into ${batches.length} batches of up to ${batchSize}`);
-    
+    // Process collections one at a time since the collections endpoint doesn't support batch queries
     const allResults = [];
     
-    for (let batchIndex = 0; batchIndex < batches.length; batchIndex++) {
-        const batch = batches[batchIndex];
-        console.log(`\n🔄 Processing batch ${batchIndex + 1}/${batches.length} (${batch.length} collections)...`);
+    console.log(`\n� Processing ${collections.length} collections for ${network}...`);
+    
+    // Fetch current crypto prices for USD conversion
+    const cryptoPrices = await getCryptoPrices();
+    
+    for (let i = 0; i < collections.length; i++) {
+        const collection = collections[i];
+        const contractAddress = collection.contract_address.toLowerCase();
         
-        // Build collection IDs array for the API
-        const collectionIds = batch.map(c => `${network}:${c.contract_address.toLowerCase()}`);
-        
-        // Build URL with collection IDs as query parameters
-        // IMPORTANT: Request enough results to get at least one bid per collection
-        // API returns bids sorted by price globally, not one per collection
-        // API only allows specific limit values: 1, 5, 10, 20, 50, 100
-        const baseUrl = 'https://api-mainnet.magiceden.dev/v4/bids';
-        const queryParams = collectionIds.map(id => `collectionIds[]=${encodeURIComponent(id)}`).join('&');
-        
-        // Use 100 limit for batches (maximum allowed, covers all 40 collections)
-        const limit = 100;
-        const url = `${baseUrl}?${queryParams}&sortBy=price&sortDir=desc&limit=${limit}`;
-        
-        console.log(`📡 API URL: ${url.substring(0, 150)}...`);
-        console.log(`📊 Fetching top ${limit} bids across ${collectionIds.length} collections`);
+        console.log(`\n📦 [${i + 1}/${collections.length}] ${collection.collection_name} (${contractAddress.substring(0, 10)}...)`);
         
         try {
+            // Use v4 collections endpoint for floor price
+            const url = `https://api-mainnet.magiceden.dev/v4/collections?chain=${network}&id=${contractAddress}`;
+            
+            console.log(`� Fetching: ${url}`);
+            
             const response = await fetch(url, {
                 headers: {
                     'accept': 'application/json'
                 }
             });
             
-            console.log(`📊 Response status: ${response.status} ${response.statusText}`);
-            console.log(`📋 Content-Type: ${response.headers.get('content-type')}`);
-            
             if (!response.ok) {
                 console.error(`❌ API responded with status ${response.status}`);
-                const rawText = await response.text();
-                console.error(`📄 Response body (first 200 chars): ${rawText.substring(0, 200)}`);
-                
-                // Continue to next batch instead of failing completely
+                await delay(RATE_LIMIT_DELAY);
                 continue;
             }
             
-            const rawText = await response.text();
+            const data = await response.json();
             
-            let data;
-            try {
-                data = JSON.parse(rawText);
-            } catch (parseError) {
-                console.error(`❌ Failed to parse JSON response`);
-                console.error(`📄 Raw text (first 200 chars): ${rawText.substring(0, 200)}`);
-                console.error(`❌ Parse error: ${parseError.message}`);
-                continue;
-            }
-            
-            console.log(`✅ Received data for batch`);
-            console.log(`📊 Data structure:`, {
-                hasData: !!data.data,
-                dataCount: data.data?.length || 0,
-                hasPagination: !!data.pagination
-            });
-            
-            // Process the bids data
-            if (data.data && Array.isArray(data.data)) {
-                // Group bids by collection contract address
-                // IMPORTANT: Only include collection-wide bids (criteria.type === "COLLECTION")
-                // Exclude individual NFT bids (criteria.type === "ASSET")
-                // Also exclude attribute-specific bids (criteria.type === "ATTRIBUTE")
-                const bidsByCollection = {};
+            // Check if we have collection data
+            if (data && data.collections && Array.isArray(data.collections) && data.collections.length > 0) {
+                const collectionData = data.collections[0];
                 
-                console.log(`🔍 Processing ${data.data.length} bids from API response...`);
+                // Get floor ask price from collection data
+                const floorAsk = collectionData.floorAsk;
                 
-                data.data.forEach((item, index) => {
-                    if (item.bid && item.bid.contract) {
-                        const criteriaType = item.bid.criteria?.type;
-                        
-                        // Filter out individual NFT bids and attribute-specific bids
-                        if (criteriaType === 'ASSET') {
-                            console.log(`⏭️  Bid ${index + 1}: Skipping ASSET bid (individual NFT)`);
-                            return;
-                        }
-                        
-                        if (criteriaType === 'ATTRIBUTE') {
-                            console.log(`⏭️  Bid ${index + 1}: Skipping ATTRIBUTE bid (trait-specific)`);
-                            return;
-                        }
-                        
-                        // Accept COLLECTION bids and bids without criteria type
-                        if (criteriaType === 'COLLECTION' || !criteriaType) {
-                            console.log(`✅ Bid ${index + 1}: Accepting ${criteriaType || 'NO_CRITERIA'} bid`);
-                            const contract = item.bid.contract.toLowerCase();
-                            if (!bidsByCollection[contract]) {
-                                bidsByCollection[contract] = [];
-                            }
-                            bidsByCollection[contract].push(item.bid);
-                        } else {
-                            console.log(`⚠️  Bid ${index + 1}: Unknown criteria type: ${criteriaType}`);
-                        }
-                    }
-                });
-                
-                console.log(`📊 Found collection-wide bids for ${Object.keys(bidsByCollection).length} collections out of ${batch.length} requested`);
-                console.log(`📋 Collections with bids:`, Object.keys(bidsByCollection).map(c => c.substring(0, 10) + '...').join(', '));
-                
-                // Fetch current crypto prices for USD conversion
-                const cryptoPrices = await getCryptoPrices();
-                
-                // Match bids back to our collections and extract highest bid data
-                batch.forEach(collection => {
-                    const contractLower = collection.contract_address.toLowerCase();
-                    const bids = bidsByCollection[contractLower];
+                if (floorAsk && floorAsk.price && floorAsk.price.amount) {
+                    const floorPriceNative = parseFloat(floorAsk.price.amount.native || 0);
+                    const floorPriceUSD = parseFloat(floorAsk.price.amount.usd || 0);
+                    const currency = floorAsk.price.currency?.symbol || (network === 'ethereum' ? 'ETH' : 'APE');
                     
-                    if (bids && bids.length > 0) {
-                        // Sort bids by USD value descending (highest first)
-                        // Use priceV2.amount.fiat.usd for reliable sorting
-                        const sortedBids = bids.sort((a, b) => {
-                            const usdA = a.priceV2?.amount?.fiat?.usd ? parseFloat(a.priceV2.amount.fiat.usd) : 0;
-                            const usdB = b.priceV2?.amount?.fiat?.usd ? parseFloat(b.priceV2.amount.fiat.usd) : 0;
-                            return usdB - usdA;
-                        });
-                        
-                        const topBid = sortedBids[0];
-                        
-                        if (topBid.priceV2 && topBid.priceV2.amount && topBid.priceV2.amount.fiat && topBid.priceV2.amount.fiat.usd) {
-                            const floorPriceUSD = parseFloat(topBid.priceV2.amount.fiat.usd);
-                            const currency = topBid.priceV2.currency?.symbol || (network === 'ethereum' ? 'WETH' : 'wAPE');
-                            
-                            // Convert USD back to crypto using live exchange rate
-                            const exchangeRate = cryptoPrices[currency] || cryptoPrices[currency?.toUpperCase()];
-                            const floorPrice = exchangeRate ? floorPriceUSD / exchangeRate : parseFloat(topBid.priceV2.amount.native || 0);
-                            
-                            console.log(`💰 ${collection.collection_name}: Top bid = $${floorPriceUSD.toFixed(2)} → ${floorPrice.toFixed(4)} ${currency} (@ $${exchangeRate?.toFixed(4)}/each)`);
-                            
-                            allResults.push({
-                                contractAddress: contractLower,
-                                floorPrice: floorPrice,
-                                floorPriceUSD: floorPriceUSD,
-                                currency: currency,
-                                collectionName: collection.collection_name,
-                                network: network,
-                                lastUpdated: new Date().toISOString(),
-                                dataSource: 'bids',
-                                suspicious: false,
-                                isActive: true
-                            });
-                        } else {
-                            console.warn(`⚠️ ${collection.collection_name}: Bid found but no valid USD price data`);
-                        }
-                    } else {
-                        console.warn(`⚠️ ${collection.collection_name}: No collection-wide bids found (only individual NFT bids)`);
-                    }
-                });
+                    console.log(`✅ Floor Ask: ${floorPriceNative} ${currency} ($${floorPriceUSD.toFixed(2)})`);
+                    
+                    allResults.push({
+                        contractAddress: contractAddress,
+                        floorPrice: floorPriceNative,
+                        floorPriceUSD: floorPriceUSD,
+                        currency: currency,
+                        collectionName: collection.collection_name,
+                        network: network,
+                        lastUpdated: new Date().toISOString(),
+                        dataSource: 'collections_v4',
+                        suspicious: false,
+                        isActive: true
+                    });
+                } else {
+                    console.warn(`⚠️ No floorAsk data found`);
+                }
+            } else {
+                console.warn(`⚠️ No collection data returned`);
             }
             
-            // Rate limiting between batches
-            if (batchIndex < batches.length - 1) {
+            // Rate limiting between requests
+            if (i < collections.length - 1) {
                 await delay(RATE_LIMIT_DELAY);
             }
             
         } catch (error) {
-            console.error(`❌ Batch ${batchIndex + 1} failed:`, error.message);
-            // Continue to next batch
+            console.error(`❌ Failed: ${error.message}`);
         }
     }
     
@@ -534,9 +437,9 @@ const fetchCollectionFloorPrice = async (contractAddress, network = 'ethereum', 
  * Fetch floor prices for multiple collections with rate limiting and activity validation
  */
 const fetchMultipleFloorPrices = async (collections) => {
-    console.log(`\n=== 🏷️ Starting Floor Price Fetching with Batch API (v4) ===`);
+    console.log(`\n=== 🏷️ Starting Floor Price Fetching with Collections API (v4) ===`);
     console.log(`📊 Processing ${collections.length} collections...`);
-    console.log(`⚡ Using batch processing: up to 40 collections per API call`);
+    console.log(`📡 Using Magic Eden v4 Collections endpoint for accurate floor prices`);
     
     const results = [];
     const failures = [];
@@ -554,7 +457,7 @@ const fetchMultipleFloorPrices = async (collections) => {
         console.log(`\n--- Processing Ethereum collections ---`);
         const ethereumResults = await fetchCollectionFloorPricesBatch(ethereumCollections, 'ethereum');
         
-        requestCount += Math.ceil(ethereumCollections.length / 40); // Count batch requests
+        requestCount += ethereumCollections.length; // Count individual requests
         
         // Match results back to original collection data
         ethereumResults.forEach(result => {
@@ -601,7 +504,7 @@ const fetchMultipleFloorPrices = async (collections) => {
         console.log(`\n--- Processing ApeChain collections ---`);
         const apechainResults = await fetchCollectionFloorPricesBatch(apechainCollections, 'apechain');
         
-        requestCount += Math.ceil(apechainCollections.length / 40); // Count batch requests
+        requestCount += apechainCollections.length; // Count individual requests
         
         // Match results back to original collection data
         apechainResults.forEach(result => {
@@ -647,9 +550,8 @@ const fetchMultipleFloorPrices = async (collections) => {
     console.log(`   🚫 Suspicious collections (set to $0): ${suspicious.length}`);
     console.log(`   ❌ API failures: ${failures.length}`);
     console.log(`   🔍 Data retrieval rate: ${((results.length / collections.length) * 100).toFixed(1)}%`);
-    console.log(`   🕒 Total API requests (batches): ${requestCount}`);
-    console.log(`   ⚡ Batch size: 40 collections per request`);
-    console.log(`   � Efficiency: ${(collections.length / (requestCount || 1)).toFixed(1)} collections per API call\n`);
+    console.log(`   🕒 Total API requests: ${requestCount}`);
+    console.log(`   📡 API: Magic Eden v4 Collections endpoint\n`);
     
     if (suspicious.length > 0) {
         console.log(`🚫 Suspicious Collections (Floor Price Set to $0):`);
