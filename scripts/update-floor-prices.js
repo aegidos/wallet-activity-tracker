@@ -661,23 +661,31 @@ const getCryptoPrices = async () => {
     try {
         console.log('💰 Fetching current crypto prices...');
         
-        // Fetch ETH price
-        console.log('🔍 Fetching ETH price from Binance...');
-        const ethResponse = await fetch('https://api.binance.com/api/v3/ticker/price?symbol=ETHUSDT');
-        console.log(`📊 ETH Response status: ${ethResponse.status}`);
-        const ethData = await ethResponse.json();
-        console.log(`📄 ETH Response data:`, ethData);
-        const ethPrice = parseFloat(ethData.price);
-        console.log(`💰 ETH Price parsed: ${ethPrice}`);
+        // Use CoinGecko API (no geo-restrictions, no API key required for basic calls)
+        // Free tier: 10-50 calls/minute
+        const coingeckoUrl = 'https://api.coingecko.com/api/v3/simple/price?ids=ethereum,apecoin&vs_currencies=usd';
         
-        // Fetch APE price
-        console.log('🔍 Fetching APE price from Binance...');
-        const apeResponse = await fetch('https://api.binance.com/api/v3/ticker/price?symbol=APEUSDT');
-        console.log(`📊 APE Response status: ${apeResponse.status}`);
-        const apeData = await apeResponse.json();
-        console.log(`📄 APE Response data:`, apeData);
-        const apePrice = parseFloat(apeData.price);
-        console.log(`💰 APE Price parsed: ${apePrice}`);
+        console.log('� Fetching prices from CoinGecko...');
+        const response = await fetch(coingeckoUrl, {
+            headers: {
+                'Accept': 'application/json'
+            }
+        });
+        
+        console.log(`� Response status: ${response.status}`);
+        
+        if (!response.ok) {
+            throw new Error(`CoinGecko API responded with status ${response.status}`);
+        }
+        
+        const data = await response.json();
+        console.log(`📄 Response data:`, data);
+        
+        const ethPrice = data.ethereum?.usd || 3000;
+        const apePrice = data.apecoin?.usd || 0.45;
+        
+        console.log(`💰 ETH Price: ${ethPrice}`);
+        console.log(`💰 APE Price: ${apePrice}`);
         
         console.log(`✅ ETH: $${ethPrice.toFixed(2)}`);
         console.log(`✅ APE: $${apePrice.toFixed(4)}`);
@@ -689,7 +697,7 @@ const getCryptoPrices = async () => {
             wAPE: apePrice  // Wrapped APE = APE
         };
     } catch (error) {
-        console.warn('⚠️ Failed to fetch crypto prices, using fallback:', error.message);
+        console.warn('⚠️ Failed to fetch crypto prices from CoinGecko, using fallback:', error.message);
         console.error('🔍 Full error details:', error);
         return {
             ETH: 3000,
