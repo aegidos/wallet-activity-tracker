@@ -662,14 +662,22 @@ const getCryptoPrices = async () => {
         console.log('💰 Fetching current crypto prices...');
         
         // Fetch ETH price
+        console.log('🔍 Fetching ETH price from Binance...');
         const ethResponse = await fetch('https://api.binance.com/api/v3/ticker/price?symbol=ETHUSDT');
+        console.log(`📊 ETH Response status: ${ethResponse.status}`);
         const ethData = await ethResponse.json();
+        console.log(`📄 ETH Response data:`, ethData);
         const ethPrice = parseFloat(ethData.price);
+        console.log(`💰 ETH Price parsed: ${ethPrice}`);
         
         // Fetch APE price
+        console.log('🔍 Fetching APE price from Binance...');
         const apeResponse = await fetch('https://api.binance.com/api/v3/ticker/price?symbol=APEUSDT');
+        console.log(`📊 APE Response status: ${apeResponse.status}`);
         const apeData = await apeResponse.json();
+        console.log(`📄 APE Response data:`, apeData);
         const apePrice = parseFloat(apeData.price);
+        console.log(`💰 APE Price parsed: ${apePrice}`);
         
         console.log(`✅ ETH: $${ethPrice.toFixed(2)}`);
         console.log(`✅ APE: $${apePrice.toFixed(4)}`);
@@ -682,6 +690,7 @@ const getCryptoPrices = async () => {
         };
     } catch (error) {
         console.warn('⚠️ Failed to fetch crypto prices, using fallback:', error.message);
+        console.error('🔍 Full error details:', error);
         return {
             ETH: 3000,
             APE: 0.45,
