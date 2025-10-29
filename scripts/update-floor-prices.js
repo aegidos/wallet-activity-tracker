@@ -270,8 +270,8 @@ const fetchCollectionFloorPricesBatch = async (collections, network = 'apechain'
         console.log(`\n📦 [${i + 1}/${collections.length}] ${collection.collection_name} (${contractAddress.substring(0, 10)}...)`);
         
         try {
-            // Use v4 collections endpoint for floor price
-            const url = `https://api-mainnet.magiceden.dev/v4/collections?chain=${network}&id=${contractAddress}`;
+            //Use v4 collections attribute_stats endpoint for floor price
+            const url = `https://api-mainnet.magiceden.dev/v4/collections/attribute_stats?chain=${network}&collectionId=${contractAddress}`;
             
             console.log(`� Fetching: ${url}`);
             
@@ -289,37 +289,47 @@ const fetchCollectionFloorPricesBatch = async (collections, network = 'apechain'
             
             const data = await response.json();
             
-            // Check if we have collection data
-            if (data && data.collections && Array.isArray(data.collections) && data.collections.length > 0) {
-                const collectionData = data.collections[0];
+            // The attribute_stats endpoint returns attributes with floorAskPrice
+            // We need to find the lowest floorAskPrice across all attributes
+            if (data && data.attributes && Array.isArray(data.attributes) && data.attributes.length > 0) {
+                let lowestFloorPrice = null;
+                let lowestFloorPriceUSD = null;
+                let currency = null;
                 
-                // Get floor ask price from collection data
-                const floorAsk = collectionData.floorAsk;
+                // Find the lowest floor price across all attributes
+                for (const attribute of data.attributes) {
+                    if (attribute.floorAskPrice && attribute.floorAskPrice.amount) {
+                        const priceNative = parseFloat(attribute.floorAskPrice.amount.native || 0);
+                        const priceUSD = parseFloat(attribute.floorAskPrice.amount.fiat?.usd || 0);
+                        
+                        if (priceNative > 0 && (lowestFloorPrice === null || priceNative < lowestFloorPrice)) {
+                            lowestFloorPrice = priceNative;
+                            lowestFloorPriceUSD = priceUSD;
+                            currency = attribute.floorAskPrice.currency?.symbol || (network === 'ethereum' ? 'ETH' : 'APE');
+                        }
+                    }
+                }
                 
-                if (floorAsk && floorAsk.price && floorAsk.price.amount) {
-                    const floorPriceNative = parseFloat(floorAsk.price.amount.native || 0);
-                    const floorPriceUSD = parseFloat(floorAsk.price.amount.usd || 0);
-                    const currency = floorAsk.price.currency?.symbol || (network === 'ethereum' ? 'ETH' : 'APE');
-                    
-                    console.log(`✅ Floor Ask: ${floorPriceNative} ${currency} ($${floorPriceUSD.toFixed(2)})`);
+                if (lowestFloorPrice !== null) {
+                    console.log(`✅ Floor Ask: ${lowestFloorPrice} ${currency} ($${lowestFloorPriceUSD.toFixed(2)})`);
                     
                     allResults.push({
                         contractAddress: contractAddress,
-                        floorPrice: floorPriceNative,
-                        floorPriceUSD: floorPriceUSD,
+                        floorPrice: lowestFloorPrice,
+                        floorPriceUSD: lowestFloorPriceUSD,
                         currency: currency,
                         collectionName: collection.collection_name,
                         network: network,
                         lastUpdated: new Date().toISOString(),
-                        dataSource: 'collections_v4',
+                        dataSource: 'attribute_stats_v4',
                         suspicious: false,
                         isActive: true
                     });
                 } else {
-                    console.warn(`⚠️ No floorAsk data found`);
+                    console.warn(`⚠️ No valid floor prices found in attributes`);
                 }
             } else {
-                console.warn(`⚠️ No collection data returned`);
+                console.warn(`⚠️ No attribute data returned`);
             }
             
             // Rate limiting between requests
