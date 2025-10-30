@@ -1738,6 +1738,20 @@ function WalletAnalyzer({ account, connectedAccount, onDisconnect, onClearAnalys
                 console.log(`  - ${collection.name || 'Unknown'} (${address.slice(0,8)}...): ${collection.nfts.length} NFTs on ${collection.networkDisplayName}`);
             });
 
+            // Filter shadow collections (ApeChain copies of Ethereum NFTs) - set floor price to 0
+            const shadowCollections = [
+                'mutant ape yacht club shadow',
+                'bored ape yacht club shadow'
+            ];
+            
+            Object.entries(collectionMap).forEach(([address, collection]) => {
+                const collectionName = (collection.name || '').toLowerCase();
+                if (shadowCollections.some(shadow => collectionName.includes(shadow))) {
+                    console.log(`🚫 Shadow collection detected: ${collection.name} - will be set to 0 ETH`);
+                    collection.isShadowCollection = true;
+                }
+            });
+
             // Fetch floor prices for each collection
             await fetchFloorPrices(collectionMap);
 
@@ -1790,6 +1804,30 @@ function WalletAnalyzer({ account, connectedAccount, onDisconnect, onClearAnalys
         
         for (const [contractAddress, collectionData] of Object.entries(collectionMap)) {
             const cachedPrice = cachedFloorPrices[contractAddress.toLowerCase()];
+            
+            // Check if this is a shadow collection first
+            if (collectionData.isShadowCollection) {
+                floorPrices[contractAddress.toLowerCase()] = {
+                    floorPrice: 0,
+                    priceUSD: 0,
+                    currency: collectionData.network === 'ethereum' ? 'ETH' : 'APE',
+                    collectionName: collectionData.name,
+                    network: collectionData.network,
+                    isShadowCollection: true
+                };
+                
+                successfulFetches.push({
+                    name: collectionData.name,
+                    address: contractAddress.slice(0, 8) + '...',
+                    price: `0 ${collectionData.network === 'ethereum' ? 'ETH' : 'APE'}`,
+                    priceUSD: '$0.00',
+                    network: collectionData.network,
+                    shadowCollection: true
+                });
+                
+                console.log(`🚫 Shadow collection set to $0: ${collectionData.name}`);
+                continue;
+            }
             
             if (cachedPrice) {
                 // Use cached floor price
