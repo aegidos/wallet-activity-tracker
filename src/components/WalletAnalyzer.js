@@ -908,7 +908,8 @@ function WalletAnalyzer({ account, connectedAccount, onDisconnect, onClearAnalys
             "AICC",
             "以太AI",
             "XMOVE",
-            "ETHG"
+            "ETHG",
+            "Zepe.io"
             // Add more blacklisted token names/symbols here
         ].map(s => s.toLowerCase()); // normalize to lowercase for comparison
     };
@@ -2863,6 +2864,9 @@ function WalletAnalyzer({ account, connectedAccount, onDisconnect, onClearAnalys
 
         const nftByTx = {};
         if (safeNftData.status === '1' && Array.isArray(safeNftData.result)) {
+            // Cache NFT data globally for collection export
+            window.nftDataCache = safeNftData.result;
+            
             safeNftData.result.forEach(nft => {
                 if (nft && nft.hash) {
                     if (!nftByTx[nft.hash]) nftByTx[nft.hash] = [];
@@ -4314,19 +4318,42 @@ function WalletAnalyzer({ account, connectedAccount, onDisconnect, onClearAnalys
             'Comment (optional)', 'Trx. ID (optional)'
         ];
         
-        const csvData = filteredTransactions.map(tx => [
-            tx.date.toISOString(),
-            'APECHAIN',
-            tx.label,
-            tx.outgoingAsset || '',
-            tx.outgoingAmount || '',
-            tx.incomingAsset || '',
-            tx.incomingAmount || '',
-            tx.feeAsset || '',
-            tx.feeAmount || '',
-            tx.comment || '',
-            tx.hash
-        ]);
+        const csvData = filteredTransactions.map(tx => {
+            // Extract token ID from comment if it's an NFT transaction
+            let tokenId = null;
+            if (tx.comment && tx.comment.includes('Token ID:')) {
+                const match = tx.comment.match(/Token ID:\s*(\S+)/);
+                if (match) {
+                    tokenId = match[1];
+                }
+            }
+            
+            // Format outgoing asset with NFT ID if it's an NFT
+            let outgoingAsset = tx.outgoingAsset || '';
+            if (outgoingAsset === 'NFT' && tokenId) {
+                outgoingAsset = `OUT-NFT#${tokenId}`;
+            }
+            
+            // Format incoming asset with NFT ID if it's an NFT
+            let incomingAsset = tx.incomingAsset || '';
+            if (incomingAsset === 'NFT' && tokenId) {
+                incomingAsset = `IN-NFT#${tokenId}`;
+            }
+            
+            return [
+                tx.date.toISOString(),
+                'APECHAIN',
+                tx.label,
+                outgoingAsset,
+                tx.outgoingAmount || '',
+                incomingAsset,
+                tx.incomingAmount || '',
+                tx.feeAsset || '',
+                tx.feeAmount || '',
+                tx.comment || '',
+                tx.hash
+            ];
+        });
         
         const csvContent = [headers, ...csvData]
             .map(row => row.map(cell => `"${cell}"`).join(','))
@@ -4337,6 +4364,226 @@ function WalletAnalyzer({ account, connectedAccount, onDisconnect, onClearAnalys
         const a = document.createElement('a');
         a.href = url;
         a.download = `wallet_analysis_${account.slice(0,8)}.csv`;
+        a.click();
+        URL.revokeObjectURL(url);
+    };
+
+    const exportCollections = () => {
+        // Collect all unique NFTs from transactions (both incoming and outgoing)
+        const nftMap = new Map();
+        
+        transactions.forEach(tx => {
+            // Only process NFT transactions
+            if (tx.type === 'nft' && (tx.incomingAsset === 'NFT' || tx.outgoingAsset === 'NFT')) {
+                // Extract token ID from comment
+                let tokenId = null;
+                if (tx.comment && tx.comment.includes('Token ID:')) {
+                    const match = tx.comment.match(/Token ID:\s*(\S+)/);
+                    if (match) {
+                        tokenId = match[1];
+                    }
+                }
+                
+                // Extract collection name from comment
+                let collectionName = tx.tokenName || 'Unknown Collection';
+                if (tx.comment && tx.comment.includes('Collection:')) {
+                    const match = tx.comment.match(/Collection:\s*([^-()]+)/);
+                    if (match) {
+                        collectionName = match[1].trim();
+                    }
+                }
+                
+                // Create unique key for this NFT
+                const nftKey = `${collectionName}_${tokenId}`;
+                
+                // Store NFT info if not already stored
+                if (tokenId && !nftMap.has(nftKey)) {
+                    nftMap.set(nftKey, {
+                        collection: collectionName,
+                        tokenId: tokenId,
+                        contractAddress: '', // Will try to extract if available
+                        firstSeen: tx.date
+                    });
+                }
+            }
+        });
+        
+        // Try to get contract addresses from nftData if available
+        if (window.nftDataCache) {
+            nftMap.forEach((nftInfo, key) => {
+                const matchingNft = window.nftDataCache.find(nft => 
+                    nft.tokenID === nftInfo.tokenId && 
+                    nft.tokenName === nftInfo.collection
+                );
+                if (matchingNft && matchingNft.contractAddress) {
+                    nftInfo.contractAddress = matchingNft.contractAddress;
+                }
+            });
+        }
+        
+        // Group NFTs by collection
+        const collectionMap = new Map();
+        nftMap.forEach((nftInfo) => {
+            if (!collectionMap.has(nftInfo.collection)) {
+                collectionMap.set(nftInfo.collection, {
+                    collectionName: nftInfo.collection,
+                    contractAddress: nftInfo.contractAddress,
+                    nftIds: [],
+                    link: nftInfo.contractAddress ? `https://apescan.io/token/${nftInfo.contractAddress}` : ''
+                });
+            }
+            collectionMap.get(nftInfo.collection).nftIds.push(nftInfo.tokenId);
+        });
+        
+        // Convert to array and sort by collection name
+        const collections = Array.from(collectionMap.values()).sort((a, b) => 
+            a.collectionName.localeCompare(b.collectionName)
+        );
+        
+        // Create JSON output
+        const output = {
+            wallet: analyzedWallet,
+            exportDate: new Date().toISOString(),
+            totalCollections: collections.length,
+            totalNFTs: nftMap.size,
+            collections: collections.map(col => ({
+                collectionName: col.collectionName,
+                contractAddress: col.contractAddress || 'Not available',
+                nftCount: col.nftIds.length,
+                nftIds: col.nftIds.sort((a, b) => {
+                    // Try to sort numerically if possible
+                    const numA = parseInt(a);
+                    const numB = parseInt(b);
+                    if (!isNaN(numA) && !isNaN(numB)) {
+                        return numA - numB;
+                    }
+                    return a.toString().localeCompare(b.toString());
+                }),
+                apeScanLink: col.link || 'Contract address not available'
+            }))
+        };
+        
+        // Download as JSON
+        const blob = new Blob([JSON.stringify(output, null, 2)], { type: 'application/json' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `apechain_nft_collections_${analyzedWallet.slice(0,8)}.json`;
+        a.click();
+        URL.revokeObjectURL(url);
+    };
+
+    const exportCollectionsCSV = () => {
+        // Collect all unique NFTs from transactions (both incoming and outgoing)
+        const nftMap = new Map();
+        
+        transactions.forEach(tx => {
+            // Only process NFT transactions
+            if (tx.type === 'nft' && (tx.incomingAsset === 'NFT' || tx.outgoingAsset === 'NFT')) {
+                // Extract token ID from comment
+                let tokenId = null;
+                if (tx.comment && tx.comment.includes('Token ID:')) {
+                    const match = tx.comment.match(/Token ID:\s*(\S+)/);
+                    if (match) {
+                        tokenId = match[1];
+                    }
+                }
+                
+                // Extract collection name from comment
+                let collectionName = tx.tokenName || 'Unknown Collection';
+                if (tx.comment && tx.comment.includes('Collection:')) {
+                    const match = tx.comment.match(/Collection:\s*([^-()]+)/);
+                    if (match) {
+                        collectionName = match[1].trim();
+                    }
+                }
+                
+                // Create unique key for this NFT
+                const nftKey = `${collectionName}_${tokenId}`;
+                
+                // Store NFT info if not already stored
+                if (tokenId && !nftMap.has(nftKey)) {
+                    nftMap.set(nftKey, {
+                        collection: collectionName,
+                        tokenId: tokenId,
+                        contractAddress: '', // Will try to extract if available
+                        firstSeen: tx.date
+                    });
+                }
+            }
+        });
+        
+        // Try to get contract addresses from nftData if available
+        if (window.nftDataCache) {
+            nftMap.forEach((nftInfo, key) => {
+                const matchingNft = window.nftDataCache.find(nft => 
+                    nft.tokenID === nftInfo.tokenId && 
+                    nft.tokenName === nftInfo.collection
+                );
+                if (matchingNft && matchingNft.contractAddress) {
+                    nftInfo.contractAddress = matchingNft.contractAddress;
+                }
+            });
+        }
+        
+        // Group NFTs by collection
+        const collectionMap = new Map();
+        nftMap.forEach((nftInfo) => {
+            if (!collectionMap.has(nftInfo.collection)) {
+                collectionMap.set(nftInfo.collection, {
+                    collectionName: nftInfo.collection,
+                    contractAddress: nftInfo.contractAddress,
+                    nftIds: [],
+                    link: nftInfo.contractAddress ? `https://apescan.io/token/${nftInfo.contractAddress}` : ''
+                });
+            }
+            collectionMap.get(nftInfo.collection).nftIds.push(nftInfo.tokenId);
+        });
+        
+        // Convert to array and sort by collection name
+        const collections = Array.from(collectionMap.values()).sort((a, b) => 
+            a.collectionName.localeCompare(b.collectionName)
+        );
+        
+        // Create CSV headers
+        const headers = ['Collection Name', 'Contract Address', 'NFT Count', 'NFT IDs (comma-separated)', 'ApeScan Link'];
+        
+        // Create CSV rows
+        const csvData = collections.map(col => {
+            // Sort NFT IDs
+            const sortedIds = col.nftIds.sort((a, b) => {
+                const numA = parseInt(a);
+                const numB = parseInt(b);
+                if (!isNaN(numA) && !isNaN(numB)) {
+                    return numA - numB;
+                }
+                return a.toString().localeCompare(b.toString());
+            });
+            
+            return [
+                col.collectionName,
+                col.contractAddress || 'Not available',
+                col.nftIds.length,
+                sortedIds.join(', '),
+                col.link || 'Contract address not available'
+            ];
+        });
+        
+        // Combine headers and data
+        const csvContent = [headers, ...csvData]
+            .map(row => row.map(cell => `"${cell}"`).join(','))
+            .join('\n');
+        
+        // Add summary header at the top
+        const summary = `"Wallet: ${analyzedWallet}"\n"Export Date: ${new Date().toISOString()}"\n"Total Collections: ${collections.length}"\n"Total NFTs: ${nftMap.size}"\n\n`;
+        const fullContent = summary + csvContent;
+        
+        // Download CSV
+        const blob = new Blob([fullContent], { type: 'text/csv' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `apechain_nft_collections_${analyzedWallet.slice(0,8)}.csv`;
         a.click();
         URL.revokeObjectURL(url);
     };
@@ -5694,6 +5941,18 @@ function WalletAnalyzer({ account, connectedAccount, onDisconnect, onClearAnalys
                         </button>
                         <button className="export-btn" onClick={exportToCSV}>
                             Export CSV
+                        </button>
+                        <button className="export-btn" onClick={exportCollections} style={{
+                            background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
+                            border: '1px solid rgba(102, 126, 234, 0.3)'
+                        }}>
+                            Get Collections (JSON)
+                        </button>
+                        <button className="export-btn" onClick={exportCollectionsCSV} style={{
+                            background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
+                            border: '1px solid rgba(102, 126, 234, 0.3)'
+                        }}>
+                            Get Collections (CSV)
                         </button>
                     </div>
                 </div>

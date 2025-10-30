@@ -26,6 +26,21 @@ const supabase = createClient(supabaseUrl, supabaseKey);
 const RATE_LIMIT_DELAY = 500; // 500ms between requests (2 requests/second)
 const SKIP_INACTIVE_COLLECTIONS = true; // Skip collections previously marked as inactive
 
+// Collection name blacklist - collections to skip during floor price updates
+const COLLECTION_BLACKLIST = [
+    'zepe.io',
+    'zepe'
+].map(s => s.toLowerCase());
+
+/**
+ * Check if a collection name is blacklisted
+ */
+const isCollectionBlacklisted = (collectionName) => {
+    if (!collectionName) return false;
+    const nameLower = collectionName.toLowerCase();
+    return COLLECTION_BLACKLIST.some(blacklisted => nameLower.includes(blacklisted));
+};
+
 /**
  * Delay function for rate limiting
  */
@@ -75,6 +90,20 @@ const getAllNftCollections = async () => {
         }
         
         console.log(`✅ Found ${allCollections.length} total collections in database`);
+        
+        // Filter out blacklisted collections first
+        const beforeBlacklist = allCollections.length;
+        allCollections = allCollections.filter(collection => {
+            const isBlacklisted = isCollectionBlacklisted(collection.collection_name);
+            if (isBlacklisted) {
+                console.log(`🚫 Blacklisted: ${collection.collection_name} (${collection.contract_address.substring(0, 8)}...)`);
+            }
+            return !isBlacklisted;
+        });
+        const blacklistedCount = beforeBlacklist - allCollections.length;
+        if (blacklistedCount > 0) {
+            console.log(`🚫 Filtered out ${blacklistedCount} blacklisted collections`);
+        }
         
         // Filter out inactive collections if SKIP_INACTIVE_COLLECTIONS is enabled
         if (SKIP_INACTIVE_COLLECTIONS) {
@@ -289,23 +318,25 @@ const fetchCollectionFloorPricesBatch = async (collections, network = 'apechain'
             
             const data = await response.json();
             
-            // The attribute_stats endpoint returns attributes with floorAskPrice
-            // We need to find the lowest floorAskPrice across all attributes
-            if (data && data.attributes && Array.isArray(data.attributes) && data.attributes.length > 0) {
+            // The attribute_stats endpoint returns both 'attributes' and 'attributeCount'
+            // - 'attributes': specific trait combinations (e.g., "Type: Blank") - can have inflated prices
+            // - 'attributeCount': NFTs grouped by total attribute count (0, 1, 2, etc.) - more reliable
+            // We use 'attributeCount' to get the true collection floor (lowest ask price)
+            if (data && data.attributeCount && Array.isArray(data.attributeCount) && data.attributeCount.length > 0) {
                 let lowestFloorPrice = null;
                 let lowestFloorPriceUSD = null;
                 let currency = null;
                 
-                // Find the lowest floor price across all attributes
-                for (const attribute of data.attributes) {
-                    if (attribute.floorAskPrice && attribute.floorAskPrice.amount) {
-                        const priceNative = parseFloat(attribute.floorAskPrice.amount.native || 0);
-                        const priceUSD = parseFloat(attribute.floorAskPrice.amount.fiat?.usd || 0);
+                // Find the lowest floor ask price across all attribute count groups
+                for (const attrCount of data.attributeCount) {
+                    if (attrCount.floorAskPrice && attrCount.floorAskPrice.amount) {
+                        const priceNative = parseFloat(attrCount.floorAskPrice.amount.native || 0);
+                        const priceUSD = parseFloat(attrCount.floorAskPrice.amount.fiat?.usd || 0);
                         
                         if (priceNative > 0 && (lowestFloorPrice === null || priceNative < lowestFloorPrice)) {
                             lowestFloorPrice = priceNative;
                             lowestFloorPriceUSD = priceUSD;
-                            currency = attribute.floorAskPrice.currency?.symbol || (network === 'ethereum' ? 'ETH' : 'APE');
+                            currency = attrCount.floorAskPrice.currency?.symbol || (network === 'ethereum' ? 'ETH' : 'APE');
                         }
                     }
                 }
@@ -326,10 +357,10 @@ const fetchCollectionFloorPricesBatch = async (collections, network = 'apechain'
                         isActive: true
                     });
                 } else {
-                    console.warn(`⚠️ No valid floor prices found in attributes`);
+                    console.warn(`⚠️ No valid floor prices found in attributeCount`);
                 }
             } else {
-                console.warn(`⚠️ No attribute data returned`);
+                console.warn(`⚠️ No attributeCount data returned`);
             }
             
             // Rate limiting between requests
