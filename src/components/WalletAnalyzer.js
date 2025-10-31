@@ -1927,23 +1927,17 @@ function WalletAnalyzer({ account, connectedAccount, onDisconnect, onClearAnalys
                 }
                 requestCount++;
                 
-                // Determine the correct Magic Eden API endpoint based on network
-                let apiEndpoint;
-                if (network.toLowerCase() === 'apechain') {
-                    apiEndpoint = `https://api-mainnet.magiceden.dev/v3/rtp/apechain/collections/v7?id=${contractAddress}&includeMintStages=false&includeSecurityConfigs=false&normalizeRoyalties=false&useNonFlaggedFloorAsk=false&sortBy=allTimeVolume&limit=20`;
-                } else {
-                    // Default to ethereum for all other networks (ethereum, mainnet, etc.)
-                    apiEndpoint = `https://api-mainnet.magiceden.dev/v3/rtp/ethereum/collections/v7?id=${contractAddress}&includeMintStages=false&includeSecurityConfigs=false&normalizeRoyalties=false&useNonFlaggedFloorAsk=false&sortBy=allTimeVolume&limit=20`;
-                }
+                // Use v4 collections attribute_stats endpoint for floor price (same as update-floor-prices.js)
+                const chain = network.toLowerCase() === 'apechain' ? 'apechain' : 'ethereum';
+                const apiEndpoint = `https://api-mainnet.magiceden.dev/v4/collections/attribute_stats?chain=${chain}&collectionId=${contractAddress}`;
                 
-                console.log(`🌐 Using ${network} endpoint for ${collectionName}`);
+                console.log(`🌐 Using ${chain} endpoint for ${collectionName}`);
+                console.log(`📡 Fetching: ${apiEndpoint}`);
                 
-                // Query Magic Eden API with specific collection id parameter
+                // Query Magic Eden v4 API with attribute_stats endpoint
                 const response = await fetch(apiEndpoint, {
                     headers: {
-                        'accept': '*/*',
-                        // Note: In production, you would add your API key here
-                        // 'Authorization': 'Bearer YOUR_API_KEY'
+                        'accept': 'application/json'
                     }
                 });
 
@@ -1958,56 +1952,69 @@ function WalletAnalyzer({ account, connectedAccount, onDisconnect, onClearAnalys
                 }
 
                 const data = await response.json();
-                const collections = data.collections || [];
                 
-                if (collections.length > 0) {
-                    const collection = collections[0]; // Take the first (and likely only) result
+                // The attribute_stats endpoint returns both 'attributes' and 'attributeCount'
+                // - 'attributes': specific trait combinations (e.g., "Type: Blank") - can have inflated prices
+                // - 'attributeCount': NFTs grouped by total attribute count (0, 1, 2, etc.) - more reliable
+                // We use 'attributeCount' to get the true collection floor (lowest ask price)
+                if (data && data.attributeCount && Array.isArray(data.attributeCount) && data.attributeCount.length > 0) {
+                    let lowestFloorPrice = null;
+                    let lowestFloorPriceUSD = null;
+                    let currency = null;
                     
-                    if (collection.floorAsk?.price?.amount?.decimal) {
-                        const floorPrice = collection.floorAsk.price.amount.decimal;
-                        const floorPriceUSD = collection.floorAsk.price.amount.usd;
-                        const currency = collection.floorAsk.price.currency.symbol;
-                        
+                    // Find the lowest floor ask price across all attribute count groups
+                    for (const attrCount of data.attributeCount) {
+                        if (attrCount.floorAskPrice && attrCount.floorAskPrice.amount) {
+                            const priceNative = parseFloat(attrCount.floorAskPrice.amount.native || 0);
+                            const priceUSD = parseFloat(attrCount.floorAskPrice.amount.fiat?.usd || 0);
+                            
+                            if (priceNative > 0 && (lowestFloorPrice === null || priceNative < lowestFloorPrice)) {
+                                lowestFloorPrice = priceNative;
+                                lowestFloorPriceUSD = priceUSD;
+                                currency = attrCount.floorAskPrice.currency?.symbol || (chain === 'ethereum' ? 'ETH' : 'APE');
+                            }
+                        }
+                    }
+                    
+                    if (lowestFloorPrice !== null) {
                         floorPrices[contractAddress.toLowerCase()] = {
-                            floorPrice: floorPrice,
+                            floorPrice: lowestFloorPrice,
                             currency: currency,
-                            collectionName: collection.name || collectionName,
-                            collectionSlug: collection.slug,
-                            priceUSD: floorPriceUSD
+                            collectionName: collectionName,
+                            collectionSlug: null,
+                            priceUSD: lowestFloorPriceUSD
                         };
                         
                         successfulFetches.push({
-                            name: collection.name || collectionName,
+                            name: collectionName,
                             address: contractAddress.slice(0, 8) + '...',
-                            price: `${floorPrice} ${currency}`,
-                            priceUSD: floorPriceUSD ? `$${floorPriceUSD.toLocaleString()}` : 'N/A',
-                            slug: collection.slug,
+                            price: `${lowestFloorPrice} ${currency}`,
+                            priceUSD: lowestFloorPriceUSD ? `$${lowestFloorPriceUSD.toLocaleString()}` : 'N/A',
+                            slug: null,
                             network: network
                         });
                         
                         // 🎉 SUCCESS - Make this VERY visible
                         console.log(`%c✅ FLOOR PRICE FOUND! 🎉`, 'color: #10b981; font-weight: bold; font-size: 14px;');
-                        console.log(`%c   Collection: ${collection.name || collectionName}`, 'color: #3b82f6; font-weight: bold;');
+                        console.log(`%c   Collection: ${collectionName}`, 'color: #3b82f6; font-weight: bold;');
                         console.log(`%c   Network: ${network.toUpperCase()}`, 'color: #8b5cf6; font-weight: bold;');
-                        console.log(`%c   Floor Price: ${floorPrice} ${currency} ($${floorPriceUSD?.toLocaleString() || 'N/A'})`, 'color: #f59e0b; font-weight: bold;');
-                        console.log(`%c   Magic Eden Slug: "${collection.slug}"`, 'color: #8b5cf6;');
+                        console.log(`%c   Floor Ask: ${lowestFloorPrice} ${currency} ($${lowestFloorPriceUSD?.toFixed(2) || 'N/A'})`, 'color: #f59e0b; font-weight: bold;');
                         console.log(`%c   Contract: ${contractAddress}`, 'color: #6b7280;');
-                        
                     } else {
                         failedFetches.push({
                             name: collectionName,
                             address: contractAddress.slice(0, 8) + '...',
-                            reason: 'No floor price data available'
+                            reason: 'No valid floor prices found in attributeCount'
                         });
-                        console.log(`❌ ${collectionName}: Found in Magic Eden but no floor price available`);
+                        console.log(`❌ ${collectionName}: No valid floor prices in attributeCount`);
                     }
                 } else {
                     failedFetches.push({
                         name: collectionName,
                         address: contractAddress.slice(0, 8) + '...',
-                        reason: 'Collection not found in Magic Eden'
+                        reason: 'No attributeCount data returned'
                     });
-                    console.log(`❌ ${collectionName}: Collection not found in Magic Eden`);
+                    console.log(`❌ ${collectionName}: No attributeCount data returned`);
                 }
                 
             } catch (error) {
