@@ -311,7 +311,20 @@ const fetchCollectionFloorPricesBatch = async (collections, network = 'apechain'
             });
             
             if (!response.ok) {
-                console.error(`❌ API responded with status ${response.status}`);
+                console.error(`❌ API responded with status ${response.status} - setting to $0 (inactive collection)`);
+                // Set floor price to 0 for API errors
+                allResults.push({
+                    contractAddress: contractAddress,
+                    floorPrice: 0,
+                    floorPriceUSD: 0,
+                    currency: network === 'ethereum' ? 'ETH' : 'APE',
+                    collectionName: collection.collection_name,
+                    network: network,
+                    lastUpdated: new Date().toISOString(),
+                    dataSource: 'attribute_stats_v4',
+                    suspicious: false,
+                    isActive: false
+                });
                 await delay(RATE_LIMIT_DELAY);
                 continue;
             }
@@ -357,10 +370,36 @@ const fetchCollectionFloorPricesBatch = async (collections, network = 'apechain'
                         isActive: true
                     });
                 } else {
-                    console.warn(`⚠️ No valid floor prices found in attributeCount`);
+                    console.warn(`⚠️ No valid floor prices found in attributeCount - setting to $0 (inactive collection)`);
+                    // Set floor price to 0 for inactive collections
+                    allResults.push({
+                        contractAddress: contractAddress,
+                        floorPrice: 0,
+                        floorPriceUSD: 0,
+                        currency: network === 'ethereum' ? 'ETH' : 'APE',
+                        collectionName: collection.collection_name,
+                        network: network,
+                        lastUpdated: new Date().toISOString(),
+                        dataSource: 'attribute_stats_v4',
+                        suspicious: false,
+                        isActive: false
+                    });
                 }
             } else {
-                console.warn(`⚠️ No attributeCount data returned`);
+                console.warn(`⚠️ No attributeCount data returned - setting to $0 (inactive collection)`);
+                // Set floor price to 0 for collections with no data
+                allResults.push({
+                    contractAddress: contractAddress,
+                    floorPrice: 0,
+                    floorPriceUSD: 0,
+                    currency: network === 'ethereum' ? 'ETH' : 'APE',
+                    collectionName: collection.collection_name,
+                    network: network,
+                    lastUpdated: new Date().toISOString(),
+                    dataSource: 'attribute_stats_v4',
+                    suspicious: false,
+                    isActive: false
+                });
             }
             
             // Rate limiting between requests
@@ -369,7 +408,20 @@ const fetchCollectionFloorPricesBatch = async (collections, network = 'apechain'
             }
             
         } catch (error) {
-            console.error(`❌ Failed: ${error.message}`);
+            console.error(`❌ Failed: ${error.message} - setting to $0 (inactive collection)`);
+            // Set floor price to 0 for request failures
+            allResults.push({
+                contractAddress: contractAddress,
+                floorPrice: 0,
+                floorPriceUSD: 0,
+                currency: network === 'ethereum' ? 'ETH' : 'APE',
+                collectionName: collection.collection_name,
+                network: network,
+                lastUpdated: new Date().toISOString(),
+                dataSource: 'attribute_stats_v4',
+                suspicious: false,
+                isActive: false
+            });
         }
     }
     
